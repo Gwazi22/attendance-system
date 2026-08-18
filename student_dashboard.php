@@ -7,20 +7,17 @@ $student_id = $_SESSION["user_id"];
 $error = "";
 $success = "";
 
-// Get the student's real IP address as seen by the server
 function get_client_ip() {
     if (!empty($_SERVER['HTTP_CLIENT_IP'])) {
         return $_SERVER['HTTP_CLIENT_IP'];
     }
     if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-        // May contain a comma-separated list; take the first
         $parts = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
         return trim($parts[0]);
     }
     return $_SERVER['REMOTE_ADDR'];
 }
 
-// Check whether this student has an enrolled face profile
 $has_face_profile = false;
 $fp_stmt = $conn->prepare("SELECT profile_id FROM face_profiles WHERE student_id = ?");
 $fp_stmt->bind_param("i", $student_id);
@@ -37,7 +34,6 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["join_code"])) {
     if (empty($join_code)) {
         $error = "Please enter the join code given by your lecturer.";
     } else {
-        // 1. Look up the session by join code
         $stmt = $conn->prepare(
             "SELECT s.session_id, s.start_time, s.end_time, s.status, c.course_code, c.course_title
              FROM attendance_sessions s
@@ -53,8 +49,6 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["join_code"])) {
             $error = "Invalid join code. Please check with your lecturer and try again.";
         } else {
             $session = $result->fetch_assoc();
-
-            // 2. Check the session is active and within its time window
             $now = time();
             $start = strtotime($session['start_time']);
             $end   = strtotime($session['end_time']);
@@ -62,17 +56,14 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["join_code"])) {
             if ($session['status'] !== 'active') {
                 $error = "This session has been closed by the lecturer.";
             } elseif ($now < $start || $now > $end) {
+                $conn->query("UPDATE attendance_sessions SET status = 'closed' WHERE session_id = " . intval($session['session_id']));
                 $error = "This session is not currently open for check-in.";
             } else {
-                // 3. WiFi verification — is the student's IP on an allowed network?
                 if (!ip_matches_allowed_prefix($student_ip, $allowed_ip_prefixes)) {
                     $error = "You must be connected to the lecturer's WiFi network to check in. Your IP ($student_ip) was not recognized.";
                 } elseif (!$face_verified) {
-                    // 4. Face verification must have already passed client-side (via verify_face.php)
-                    //    before this form submits. If the flag isn't set, block here as a safety net.
                     $error = "Face verification did not complete. Please try checking in again.";
                 } else {
-                    // 5. Duplicate check
                     $dup = $conn->prepare(
                         "SELECT record_id FROM attendance_records WHERE session_id = ? AND student_id = ?"
                     );
@@ -83,7 +74,6 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["join_code"])) {
                     if ($dup->num_rows > 0) {
                         $error = "You have already been marked present for this session.";
                     } else {
-                        // 6. Insert attendance record
                         $insert = $conn->prepare(
                             "INSERT INTO attendance_records (session_id, student_id, ip_address, status)
                              VALUES (?, ?, ?, 'present')"
@@ -105,7 +95,6 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["join_code"])) {
     }
 }
 
-// Fetch this student's recent attendance history
 $history = [];
 $stmt = $conn->prepare(
     "SELECT r.marked_at, r.status, c.course_code, c.course_title
@@ -131,6 +120,9 @@ $stmt->close();
     <title>Student Dashboard</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
     <script defer src="assets/facelib/face-api.min.js"></script>
+    <style>
+        #checkinVideo { transform: scaleX(-1); }
+    </style>
 </head>
 <body class="bg-light">
 <nav class="navbar navbar-dark bg-dark px-3">
@@ -194,11 +186,7 @@ $stmt->close();
                 <div class="table-responsive">
                     <table class="table table-sm align-middle">
                         <thead>
-                            <tr>
-                                <th>Course</th>
-                                <th>Marked At</th>
-                                <th>Status</th>
-                            </tr>
+                            <tr><th>Course</th><th>Marked At</th><th>Status</th></tr>
                         </thead>
                         <tbody>
                             <?php foreach ($history as $h): ?>
@@ -226,14 +214,38 @@ $stmt->close();
 <script>
 const MODEL_URL = "assets/facelib/models";
 let modelsLoaded = false;
+let modelsLoadingPromise = null;
 let faceAlreadyVerified = false;
 
-async function ensureModelsLoaded() {
-    if (modelsLoaded) return;
-    await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-    await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-    await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
-    modelsLoaded = true;
+// Preload models silently as soon as the dashboard opens — only if student has a face profile
+function preloadModels() {
+    modelsLoadingPromise = (async () => {
+        await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+        await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+        await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+        modelsLoaded = true;
+    })();
+}
+
+// FIX: wait for full page load (including the deferred face-api.min.js script)
+// before calling preloadModels — otherwise "faceapi" may not exist yet.
+<?php if ($has_face_profile): ?>
+window.addEventListener('load', preloadModels);
+<?php endif; ?>
+
+function evaluateFacePosition(detection, video) {
+    const box = detection.detection.box;
+    const faceWidthRatio = box.width / video.videoWidth;
+    const centerX = box.x + box.width / 2;
+    const centerY = box.y + box.height / 2;
+    const offsetXRatio = Math.abs(centerX - video.videoWidth / 2) / video.videoWidth;
+    const offsetYRatio = Math.abs(centerY - video.videoHeight / 2) / video.videoHeight;
+
+    if (faceWidthRatio < 0.22) return { ok: false, message: "Move closer to the camera." };
+    if (faceWidthRatio > 0.65) return { ok: false, message: "Move back a little." };
+    if (offsetXRatio > 0.18) return { ok: false, message: "Center your face horizontally." };
+    if (offsetYRatio > 0.18) return { ok: false, message: "Center your face vertically." };
+    return { ok: true, message: "Good position — hold still..." };
 }
 
 async function runFaceVerification() {
@@ -243,7 +255,16 @@ async function runFaceVerification() {
     statusEl.className = "alert alert-info";
     statusEl.textContent = "Loading face models...";
 
-    await ensureModelsLoaded();
+    // FIX: wrapped in try/catch so a load failure shows a clear message
+    // instead of hanging forever on "Loading face models..."
+    try {
+        if (!modelsLoadingPromise) preloadModels();
+        await modelsLoadingPromise;
+    } catch (err) {
+        statusEl.className = "alert alert-danger";
+        statusEl.textContent = "Failed to load face models. Please refresh the page and try again.";
+        return false;
+    }
 
     const video = document.getElementById("checkinVideo");
     let stream;
@@ -255,24 +276,65 @@ async function runFaceVerification() {
         return false;
     }
     video.srcObject = stream;
+    statusEl.textContent = "Position your face in the frame...";
 
-    statusEl.textContent = "Position your face and hold still...";
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise(resolve => {
+        video.onloadedmetadata = () => resolve();
+    });
 
-    const detection = await faceapi
+    let stableGoodCount = 0;
+    let detection = null;
+    const maxAttempts = 40;
+    let attempts = 0;
+
+    while (attempts < maxAttempts) {
+        attempts++;
+        const d = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions());
+        if (!d) {
+            statusEl.className = "alert alert-secondary";
+            statusEl.textContent = "No face detected — make sure your face is visible.";
+            stableGoodCount = 0;
+        } else {
+            const status = evaluateFacePosition(d, video);
+            statusEl.className = status.ok ? "alert alert-success" : "alert alert-secondary";
+            statusEl.textContent = status.message;
+            if (status.ok) {
+                stableGoodCount++;
+                if (stableGoodCount >= 3) {
+                    detection = d;
+                    break;
+                }
+            } else {
+                stableGoodCount = 0;
+            }
+        }
+        await new Promise(resolve => setTimeout(resolve, 300));
+    }
+
+    if (!detection) {
+        stream.getTracks().forEach(track => track.stop());
+        statusEl.className = "alert alert-danger";
+        statusEl.textContent = "Could not get a stable face position. Please try again.";
+        return false;
+    }
+
+    statusEl.className = "alert alert-info";
+    statusEl.textContent = "Capturing...";
+
+    const fullDetection = await faceapi
         .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
         .withFaceLandmarks()
         .withFaceDescriptor();
 
     stream.getTracks().forEach(track => track.stop());
 
-    if (!detection) {
+    if (!fullDetection) {
         statusEl.className = "alert alert-danger";
         statusEl.textContent = "No face detected. Please try again.";
         return false;
     }
 
-    const descriptorArray = Array.from(detection.descriptor);
+    const descriptorArray = Array.from(fullDetection.descriptor);
 
     let result;
     try {
@@ -302,9 +364,7 @@ async function runFaceVerification() {
 const checkinForm = document.getElementById("checkinForm");
 if (checkinForm) {
     checkinForm.addEventListener("submit", async function(e) {
-        if (faceAlreadyVerified) {
-            return;
-        }
+        if (faceAlreadyVerified) return;
         e.preventDefault();
 
         const btn = document.getElementById("checkinBtn");

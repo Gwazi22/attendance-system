@@ -6,16 +6,29 @@ $lecturer_id = $_SESSION["user_id"];
 $error = "";
 $success = "";
 
+// Proactively close any of this lecturer's sessions whose end time has already passed —
+// runs every time the dashboard loads, not just when a student tries to check in late.
+$conn->query(
+    "UPDATE attendance_sessions
+     SET status = 'closed'
+     WHERE lecturer_id = " . intval($lecturer_id) . "
+       AND status = 'active'
+       AND CONCAT(session_date, ' ', end_time) < NOW()"
+);
+
 // Handle: Add a new course
 if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["add_course"])) {
     $course_code  = trim($_POST["course_code"]);
     $course_title = trim($_POST["course_title"]);
+    $course_unit  = intval($_POST["course_unit"]);
 
     if (empty($course_code) || empty($course_title)) {
         $error = "Course code and title are required.";
+    } elseif ($course_unit < 1 || $course_unit > 6) {
+        $error = "Course unit must be between 1 and 6.";
     } else {
-        $stmt = $conn->prepare("INSERT INTO courses (course_code, course_title, lecturer_id) VALUES (?, ?, ?)");
-        $stmt->bind_param("ssi", $course_code, $course_title, $lecturer_id);
+        $stmt = $conn->prepare("INSERT INTO courses (course_code, course_title, course_unit, lecturer_id) VALUES (?, ?, ?, ?)");
+        $stmt->bind_param("ssii", $course_code, $course_title, $course_unit, $lecturer_id);
         if ($stmt->execute()) {
             $success = "Course added successfully.";
         } else {
@@ -37,11 +50,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["create_session"])) {
     } elseif (strtotime($end_time) <= strtotime($start_time)) {
         $error = "End time must be after start time.";
     } else {
-        // Combine date + time into DATETIME values
         $start_datetime = $session_date . " " . $start_time . ":00";
         $end_datetime   = $session_date . " " . $end_time . ":00";
 
-        // Confirm this course belongs to this lecturer before inserting
         $check = $conn->prepare("SELECT course_id FROM courses WHERE course_id = ? AND lecturer_id = ?");
         $check->bind_param("ii", $course_id, $lecturer_id);
         $check->execute();
@@ -50,7 +61,6 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["create_session"])) {
         if ($check->num_rows === 0) {
             $error = "Invalid course selection.";
         } else {
-            // Generate a random 6-digit join code students will use to check in
             $join_code = str_pad(strval(random_int(0, 999999)), 6, "0", STR_PAD_LEFT);
 
             $insert = $conn->prepare(
@@ -82,7 +92,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["close_session"])) {
 
 // Fetch this lecturer's courses
 $courses = [];
-$stmt = $conn->prepare("SELECT course_id, course_code, course_title FROM courses WHERE lecturer_id = ?");
+$stmt = $conn->prepare("SELECT course_id, course_code, course_title, course_unit FROM courses WHERE lecturer_id = ?");
 $stmt->bind_param("i", $lecturer_id);
 $stmt->execute();
 $result = $stmt->get_result();
@@ -91,11 +101,11 @@ while ($row = $result->fetch_assoc()) {
 }
 $stmt->close();
 
-// Fetch this lecturer's sessions (most recent first)
+// Fetch this lecturer's sessions (most recent first) — now also pulling course_unit
 $sessions = [];
 $stmt = $conn->prepare(
     "SELECT s.session_id, s.session_date, s.start_time, s.end_time, s.status, s.join_code,
-            c.course_code, c.course_title,
+            c.course_code, c.course_title, c.course_unit,
             (SELECT COUNT(*) FROM attendance_records r WHERE r.session_id = s.session_id) AS attendance_count
      FROM attendance_sessions s
      JOIN courses c ON s.course_id = c.course_id
@@ -139,13 +149,17 @@ $stmt->close();
         <div class="card-body">
             <h5 class="card-title mb-3">Add a Course</h5>
             <form method="POST" action="lecturer_dashboard.php" class="row g-3">
-                <div class="col-md-5">
+                <div class="col-md-4">
                     <label class="form-label">Course Code</label>
                     <input type="text" name="course_code" class="form-control" placeholder="e.g. CSC401" required>
                 </div>
-                <div class="col-md-5">
+                <div class="col-md-4">
                     <label class="form-label">Course Title</label>
                     <input type="text" name="course_title" class="form-control" placeholder="e.g. Software Engineering" required>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Unit</label>
+                    <input type="number" name="course_unit" class="form-control" min="1" max="6" value="3" required>
                 </div>
                 <div class="col-md-2 d-flex align-items-end">
                     <button type="submit" name="add_course" class="btn btn-primary w-100">Add</button>
@@ -170,7 +184,7 @@ $stmt->close();
                             <option value="" selected disabled>-- Select a course --</option>
                             <?php foreach ($courses as $c): ?>
                                 <option value="<?= $c['course_id'] ?>">
-                                    <?= htmlspecialchars($c['course_code']) ?> — <?= htmlspecialchars($c['course_title']) ?>
+                                    <?= htmlspecialchars($c['course_code']) ?> — <?= htmlspecialchars($c['course_title']) ?> (<?= (int)$c['course_unit'] ?> Units)
                                 </option>
                             <?php endforeach; ?>
                         </select>
@@ -181,11 +195,11 @@ $stmt->close();
                     </div>
                     <div class="col-md-6">
                         <label class="form-label">Start Time</label>
-                        <input type="time" name="start_time" class="form-control" required>
+                        <input type="time" name="start_time" id="start_time" class="form-control" required>
                     </div>
                     <div class="col-md-6">
                         <label class="form-label">End Time</label>
-                        <input type="time" name="end_time" class="form-control" required>
+                        <input type="time" name="end_time" id="end_time" class="form-control" required>
                     </div>
                     <div class="col-12">
                         <button type="submit" name="create_session" class="btn btn-primary">Start Session</button>
@@ -207,6 +221,7 @@ $stmt->close();
                         <thead>
                             <tr>
                                 <th>Course</th>
+                                <th>Unit</th>
                                 <th>Date</th>
                                 <th>Time</th>
                                 <th>Join Code</th>
@@ -219,6 +234,7 @@ $stmt->close();
                         <?php foreach ($sessions as $s): ?>
                             <tr>
                                 <td><?= htmlspecialchars($s['course_code']) ?></td>
+                                <td><?= (int)$s['course_unit'] ?></td>
                                 <td><?= htmlspecialchars($s['session_date']) ?></td>
                                 <td>
                                     <?= date("g:i A", strtotime($s['start_time'])) ?> –
@@ -259,5 +275,11 @@ $stmt->close();
     </div>
 
 </div>
+
+<script>
+document.getElementById('start_time').addEventListener('change', function() {
+    document.getElementById('end_time').min = this.value;
+});
+</script>
 </body>
 </html>

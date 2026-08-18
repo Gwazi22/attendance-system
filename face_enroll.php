@@ -1,6 +1,6 @@
 <?php
 require_once "config.php";
-require_once "auth_check.php"; // any logged-in user can enroll their own face
+require_once "auth_check.php";
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -9,6 +9,9 @@ require_once "auth_check.php"; // any logged-in user can enroll their own face
     <title>Face Enrollment</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
     <script defer src="assets/facelib/face-api.min.js"></script>
+    <style>
+        #video { transform: scaleX(-1); }
+    </style>
 </head>
 <body class="bg-light">
 <div class="container" style="max-width: 480px; margin-top: 50px;">
@@ -18,6 +21,7 @@ require_once "auth_check.php"; // any logged-in user can enroll their own face
             <p class="text-muted">Position your face clearly in the frame, then click Capture.</p>
 
             <div id="statusMsg" class="alert alert-info">Loading models...</div>
+            <div id="guideMsg" class="alert alert-secondary" style="display:none;"></div>
 
             <video id="video" width="360" height="270" autoplay muted class="border rounded mb-3"></video>
 
@@ -35,15 +39,20 @@ require_once "auth_check.php"; // any logged-in user can enroll their own face
 <script>
 const video = document.getElementById("video");
 const statusMsg = document.getElementById("statusMsg");
+const guideMsg = document.getElementById("guideMsg");
 const captureBtn = document.getElementById("captureBtn");
 const resultMsg = document.getElementById("resultMsg");
 
 const MODEL_URL = "assets/facelib/models";
+let modelsLoaded = false;
+let guideInterval = null;
 
+// Preload models the instant the page loads, before camera even starts
 async function loadModels() {
     await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
     await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
     await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+    modelsLoaded = true;
     statusMsg.textContent = "Models loaded. Starting camera...";
     startCamera();
 }
@@ -54,13 +63,45 @@ async function startCamera() {
         video.srcObject = stream;
         statusMsg.classList.remove("alert-info");
         statusMsg.classList.add("alert-success");
-        statusMsg.textContent = "Camera ready. Position your face and click Capture.";
+        statusMsg.textContent = "Camera ready.";
         captureBtn.disabled = false;
+        guideMsg.style.display = "block";
+        startGuidance();
     } catch (err) {
         statusMsg.classList.remove("alert-info");
         statusMsg.classList.add("alert-danger");
         statusMsg.textContent = "Camera access denied or unavailable.";
     }
+}
+
+function evaluateFacePosition(detection, video) {
+    const box = detection.detection.box;
+    const faceWidthRatio = box.width / video.videoWidth;
+    const centerX = box.x + box.width / 2;
+    const centerY = box.y + box.height / 2;
+    const offsetXRatio = Math.abs(centerX - video.videoWidth / 2) / video.videoWidth;
+    const offsetYRatio = Math.abs(centerY - video.videoHeight / 2) / video.videoHeight;
+
+    if (faceWidthRatio < 0.22) return { ok: false, message: "Move closer to the camera." };
+    if (faceWidthRatio > 0.65) return { ok: false, message: "Move back a little." };
+    if (offsetXRatio > 0.18) return { ok: false, message: "Center your face horizontally." };
+    if (offsetYRatio > 0.18) return { ok: false, message: "Center your face vertically." };
+    return { ok: true, message: "Position looks good — hold still and click Capture." };
+}
+
+function startGuidance() {
+    guideInterval = setInterval(async () => {
+        if (!modelsLoaded || video.readyState < 2) return;
+        const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions());
+        if (!detection) {
+            guideMsg.className = "alert alert-secondary";
+            guideMsg.textContent = "No face detected — make sure your face is visible.";
+            return;
+        }
+        const status = evaluateFacePosition(detection, video);
+        guideMsg.className = status.ok ? "alert alert-success" : "alert alert-secondary";
+        guideMsg.textContent = status.message;
+    }, 400);
 }
 
 captureBtn.addEventListener("click", async () => {
@@ -88,6 +129,7 @@ captureBtn.addEventListener("click", async () => {
 
         if (result.success) {
             resultMsg.innerHTML = `<div class="alert alert-success">Face enrolled successfully!</div>`;
+            if (guideInterval) clearInterval(guideInterval);
         } else {
             resultMsg.innerHTML = `<div class="alert alert-danger">${result.message}</div>`;
         }
@@ -96,7 +138,8 @@ captureBtn.addEventListener("click", async () => {
     }
 });
 
-window.addEventListener("load", loadModels);
+// Start loading models immediately on page load — no waiting for user action
+loadModels();
 </script>
 </body>
 </html>
