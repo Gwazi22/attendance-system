@@ -15,6 +15,7 @@ $allowed_ip_prefixes = [
     "10.10.10.",      // some routers/hotspots
     "10.62.159",        // some routers/hotspots
     "10.108.108",       // some routers/hotspots
+    "192.168.1.",   // common home/office router range
 ];
 
 /**
