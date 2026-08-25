@@ -1,0 +1,11 @@
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType application/json "access plus 1 year"
+    ExpiresByType application/octet-stream "access plus 1 year"
+</IfModule>
+
+<FilesMatch "\.(json|shard.*)$">
+    <IfModule mod_headers.c>
+        Header set Cache-Control "public, max-age=31536000, immutable"
+    </IfModule>
+</FilesMatch>
