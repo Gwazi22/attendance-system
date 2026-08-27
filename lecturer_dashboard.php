@@ -119,6 +119,9 @@ while ($row = $result->fetch_assoc()) {
     $sessions[] = $row;
 }
 $stmt->close();
+
+// How many seconds before an active session's end time counts as "closing soon"
+const CLOSING_SOON_WINDOW_SECONDS = 300; // 5 minutes
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -127,23 +130,19 @@ $stmt->close();
     <title>Lecturer Dashboard</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
 </head>
-<body class="bg-light">
+<body>
 <nav class="navbar navbar-dark bg-dark px-3">
     <span class="navbar-brand mb-0 h1">Attendance System — Lecturer</span>
-    <div>
+    <div class="d-flex align-items-center">
+        <button class="btn btn-outline-light btn-sm me-2" onclick="toggleTheme()" title="Toggle dark mode">
+            <span id="themeToggleIcon">🌙</span>
+        </button>
         <span class="text-light me-3">Welcome, <?= htmlspecialchars($_SESSION["full_name"]) ?></span>
         <a href="logout.php" class="btn btn-outline-light btn-sm">Logout</a>
     </div>
 </nav>
 
 <div class="container mt-4" style="max-width: 900px;">
-
-    <?php if ($error): ?>
-        <div class="alert alert-danger"><?= htmlspecialchars($error) ?></div>
-    <?php endif; ?>
-    <?php if ($success): ?>
-        <div class="alert alert-success"><?= htmlspecialchars($success) ?></div>
-    <?php endif; ?>
 
     <div class="card shadow-sm mb-4">
         <div class="card-body">
@@ -232,6 +231,21 @@ $stmt->close();
                         </thead>
                         <tbody>
                         <?php foreach ($sessions as $s): ?>
+                            <?php
+                                // Determine "closing soon" state for active sessions.
+                                // end_time is stored as a full datetime (date + time
+                                // combined at session creation), so strtotime() on it
+                                // directly gives the real end timestamp.
+                                $is_closing_soon = false;
+                                if ($s['status'] === 'active') {
+                                    $end_ts = strtotime($s['end_time']);
+                                    $remaining = $end_ts - time();
+                                    if ($remaining > 0 && $remaining <= CLOSING_SOON_WINDOW_SECONDS) {
+                                        $is_closing_soon = true;
+                                    }
+                                }
+                                $join_code_dom_id = "joinCode" . (int)$s['session_id'];
+                            ?>
                             <tr>
                                 <td><?= htmlspecialchars($s['course_code']) ?></td>
                                 <td><?= (int)$s['course_unit'] ?></td>
@@ -242,14 +256,25 @@ $stmt->close();
                                 </td>
                                 <td>
                                     <?php if ($s['status'] === 'active'): ?>
-                                        <code class="fs-6"><?= htmlspecialchars($s['join_code']) ?></code>
+                                        <div class="d-flex align-items-center gap-2">
+                                            <code class="fs-6" id="<?= $join_code_dom_id ?>"><?= htmlspecialchars($s['join_code']) ?></code>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1"
+                                                    onclick="copyElementText('<?= $join_code_dom_id ?>', 'Join code copied!')"
+                                                    title="Copy join code">
+                                                📋
+                                            </button>
+                                        </div>
                                     <?php else: ?>
                                         <span class="text-muted">—</span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
                                     <?php if ($s['status'] === 'active'): ?>
-                                        <span class="badge bg-success">Active</span>
+                                        <?php if ($is_closing_soon): ?>
+                                            <span class="badge bg-warning text-dark">Closing Soon</span>
+                                        <?php else: ?>
+                                            <span class="badge bg-success">Active</span>
+                                        <?php endif; ?>
                                     <?php else: ?>
                                         <span class="badge bg-secondary">Closed</span>
                                     <?php endif; ?>
@@ -276,10 +301,23 @@ $stmt->close();
 
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
+<script src="assets/js/ui-polish.js"></script>
 <script>
 document.getElementById('start_time').addEventListener('change', function() {
     document.getElementById('end_time').min = this.value;
 });
+
+<?php if ($error): ?>
+document.addEventListener("DOMContentLoaded", function () {
+    showToast(<?= json_encode($error) ?>, "danger");
+});
+<?php endif; ?>
+<?php if ($success): ?>
+document.addEventListener("DOMContentLoaded", function () {
+    showToast(<?= json_encode($success) ?>, "success");
+});
+<?php endif; ?>
 </script>
 </body>
 </html>

@@ -60,15 +60,16 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         }
     </style>
 </head>
-<body class="bg-light">
-<div class="container" style="max-width: 420px; margin-top: 80px;">
+<body>
+<div class="container" style="max-width: 420px; margin-top: 60px;">
+    <div class="d-flex justify-content-end mb-2">
+        <button class="btn btn-outline-secondary btn-sm" onclick="toggleTheme()" title="Toggle dark mode">
+            <span id="themeToggleIcon">🌙</span>
+        </button>
+    </div>
     <div class="card shadow-sm">
         <div class="card-body p-4">
             <h4 class="mb-3 text-center">Login</h4>
-
-            <?php if ($error): ?>
-                <div class="alert alert-danger"><?= htmlspecialchars($error) ?></div>
-            <?php endif; ?>
 
             <form method="POST" action="login.php" autocomplete="off">
                 <div class="mb-3">
@@ -96,6 +97,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     </div>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
+<script src="assets/js/ui-polish.js"></script>
 <script>
 const eyeIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor">
     <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.13 13.13 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.133 13.133 0 0 1 1.172 8z"/>
@@ -119,6 +122,12 @@ function togglePassword(fieldId, iconSpan) {
         iconSpan.innerHTML = eyeIcon;
     }
 }
+
+<?php if ($error): ?>
+document.addEventListener("DOMContentLoaded", function () {
+    showToast(<?= json_encode($error) ?>, "danger");
+});
+<?php endif; ?>
 </script>
 </body>
 </html>

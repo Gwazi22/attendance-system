@@ -14,8 +14,13 @@ require_once "auth_check.php";
         #loadProgressBar { transition: width 0.15s linear; }
     </style>
 </head>
-<body class="bg-light">
+<body>
 <div class="container" style="max-width: 480px; margin-top: 50px;">
+    <div class="d-flex justify-content-end mb-2">
+        <button class="btn btn-outline-secondary btn-sm" onclick="toggleTheme()" title="Toggle dark mode">
+            <span id="themeToggleIcon">🌙</span>
+        </button>
+    </div>
     <div class="card shadow-sm">
         <div class="card-body p-4 text-center">
             <h4 class="mb-3">Face Enrollment</h4>
@@ -40,7 +45,7 @@ require_once "auth_check.php";
             <!-- Dynamic live guidance (position, distance, lighting, possible obstruction) -->
             <div id="guideMsg" class="alert alert-secondary" style="display:none;"></div>
 
-            <video id="video" width="360" height="270" autoplay muted class="border rounded mb-3"></video>
+            <video id="video" width="360" height="270" autoplay muted playsinline webkit-playsinline class="border rounded mb-3"></video>
 
             <div>
                 <button id="captureBtn" class="btn btn-primary w-100" disabled>Capture Face</button>
@@ -53,6 +58,7 @@ require_once "auth_check.php";
     </div>
 </div>
 
+<script src="assets/js/ui-polish.js"></script>
 <script>
 const video = document.getElementById("video");
 const statusMsg = document.getElementById("statusMsg");
@@ -157,8 +163,22 @@ async function loadModels() {
 
 async function startCamera() {
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "user" }
+        });
         video.srcObject = stream;
+        video.muted = true; // iOS sometimes ignores the muted attribute unless also set via JS
+
+        try {
+            // iOS Safari frequently needs an explicit play() call after a
+            // programmatically-assigned srcObject — without it the <video>
+            // element can silently stay on its blank/white default frame
+            // even though the camera stream was granted and attached.
+            await video.play();
+        } catch (playErr) {
+            console.warn("video.play() failed:", playErr);
+        }
+
         captureBtn.disabled = false;
         guideMsg.style.display = "block";
         startGuidance();

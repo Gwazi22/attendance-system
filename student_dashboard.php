@@ -81,7 +81,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["join_code"])) {
                         $insert->bind_param("iis", $session['session_id'], $student_id, $student_ip);
 
                         if ($insert->execute()) {
-                            $success = "You're marked present for " . htmlspecialchars($session['course_code']) . " — " . htmlspecialchars($session['course_title']) . ".";
+                            $success = "You're marked present for " . $session['course_code'] . " — " . $session['course_title'] . ".";
                         } else {
                             $error = "Something went wrong recording your attendance. Please try again.";
                         }
@@ -124,10 +124,13 @@ $stmt->close();
         #checkinVideo { transform: scaleX(-1); }
     </style>
 </head>
-<body class="bg-light">
+<body>
 <nav class="navbar navbar-dark bg-dark px-3">
     <span class="navbar-brand mb-0 h1">Attendance System — Student</span>
-    <div>
+    <div class="d-flex align-items-center">
+        <button class="btn btn-outline-light btn-sm me-2" onclick="toggleTheme()" title="Toggle dark mode">
+            <span id="themeToggleIcon">🌙</span>
+        </button>
         <span class="text-light me-3">Welcome, <?= htmlspecialchars($_SESSION["full_name"]) ?></span>
         <a href="logout.php" class="btn btn-outline-light btn-sm">Logout</a>
     </div>
@@ -140,13 +143,6 @@ $stmt->close();
             <span>You haven't enrolled your face yet. You must enroll before you can check in.</span>
             <a href="face_enroll.php" class="btn btn-sm btn-dark">Enroll Now</a>
         </div>
-    <?php endif; ?>
-
-    <?php if ($error): ?>
-        <div class="alert alert-danger"><?= htmlspecialchars($error) ?></div>
-    <?php endif; ?>
-    <?php if ($success): ?>
-        <div class="alert alert-success"><?= $success ?></div>
     <?php endif; ?>
 
     <div class="card shadow-sm mb-4">
@@ -170,9 +166,14 @@ $stmt->close();
             </form>
 
             <div id="faceCheckSection" class="mt-3" style="display:none;">
-                <p class="text-muted mb-2">Look at the camera to verify your identity.</p>
-                <video id="checkinVideo" width="320" height="240" autoplay muted class="border rounded mb-2"></video>
-                <div id="faceStatus" class="alert alert-info">Loading...</div>
+                <div id="facePrompt" class="alert alert-info">
+                    Now position your face in the frame, then tap "Start Verification" below.
+                </div>
+                <button type="button" id="startVerifyBtn" class="btn btn-primary mb-2">Start Verification</button>
+                <div>
+                    <video id="checkinVideo" width="320" height="240" autoplay muted playsinline webkit-playsinline class="border rounded mb-2" style="display:none;"></video>
+                </div>
+                <div id="faceStatus" class="alert alert-info" style="display:none;">Loading...</div>
             </div>
         </div>
     </div>
@@ -211,6 +212,8 @@ $stmt->close();
 
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
+<script src="assets/js/ui-polish.js"></script>
 <script>
 const MODEL_URL = "assets/facelib/models";
 let modelsLoaded = false;
@@ -269,13 +272,26 @@ async function runFaceVerification() {
     const video = document.getElementById("checkinVideo");
     let stream;
     try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
     } catch (err) {
         statusEl.className = "alert alert-danger";
         statusEl.textContent = "Camera access denied or unavailable.";
         return false;
     }
     video.srcObject = stream;
+    video.muted = true; // iOS sometimes ignores the muted attribute unless also set via JS
+
+    try {
+        // FIX: iOS Safari (confirmed on iPhone 8) can leave the <video>
+        // element on its blank/white default frame even after a camera
+        // stream is successfully attached via srcObject, unless play()
+        // is called explicitly. Desktop browsers don't need this, which
+        // is why this only showed up on iPhone testing.
+        await video.play();
+    } catch (playErr) {
+        console.warn("video.play() failed:", playErr);
+    }
+
     statusEl.textContent = "Position your face in the frame...";
 
     await new Promise(resolve => {
@@ -362,14 +378,37 @@ async function runFaceVerification() {
 }
 
 const checkinForm = document.getElementById("checkinForm");
+const startVerifyBtn = document.getElementById("startVerifyBtn");
+
 if (checkinForm) {
-    checkinForm.addEventListener("submit", async function(e) {
+    checkinForm.addEventListener("submit", function(e) {
+        // Entering the join code and hitting "Check In" no longer
+        // auto-starts the camera. Instead we reveal a prompt and wait for
+        // an explicit "Start Verification" tap — avoids surprising students
+        // with an instant camera popup and gives a clear cue on what to do.
         if (faceAlreadyVerified) return;
         e.preventDefault();
 
         const btn = document.getElementById("checkinBtn");
+        const joinCodeInput = document.getElementById("join_code");
         btn.disabled = true;
-        btn.textContent = "Verifying...";
+        joinCodeInput.disabled = true;
+
+        document.getElementById("faceCheckSection").style.display = "block";
+        document.getElementById("facePrompt").style.display = "block";
+        startVerifyBtn.style.display = "inline-block";
+        startVerifyBtn.disabled = false;
+        startVerifyBtn.textContent = "Start Verification";
+    });
+}
+
+if (startVerifyBtn) {
+    startVerifyBtn.addEventListener("click", async function() {
+        startVerifyBtn.disabled = true;
+        startVerifyBtn.textContent = "Verifying...";
+        document.getElementById("facePrompt").style.display = "none";
+        document.getElementById("checkinVideo").style.display = "block";
+        document.getElementById("faceStatus").style.display = "block";
 
         const verified = await runFaceVerification();
 
@@ -378,11 +417,23 @@ if (checkinForm) {
             faceAlreadyVerified = true;
             checkinForm.submit();
         } else {
-            btn.disabled = false;
-            btn.textContent = "Check In";
+            document.getElementById("facePrompt").style.display = "block";
+            startVerifyBtn.disabled = false;
+            startVerifyBtn.textContent = "Try Again";
         }
     });
 }
+
+<?php if ($error): ?>
+document.addEventListener("DOMContentLoaded", function () {
+    showToast(<?= json_encode($error) ?>, "danger");
+});
+<?php endif; ?>
+<?php if ($success): ?>
+document.addEventListener("DOMContentLoaded", function () {
+    showToast(<?= json_encode($success) ?>, "success");
+});
+<?php endif; ?>
 </script>
 </body>
 </html>
