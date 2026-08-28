@@ -2,10 +2,11 @@
 require_once "config.php";
 
 $error = "";
+$email = ""; // repopulation value — kept across a failed attempt so the student doesn't retype it
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
-    $email    = trim($_POST["email"]);
-    $password = $_POST["password"];
+    $email    = trim($_POST["email"] ?? "");
+    $password = $_POST["password"] ?? "";
 
     if (empty($email) || empty($password)) {
         $error = "Please enter both email and password.";
@@ -74,7 +75,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             <form method="POST" action="login.php" autocomplete="off">
                 <div class="mb-3">
                     <label class="form-label">Email</label>
-                    <input type="email" name="email" class="form-control" required autocomplete="off">
+                    <input type="email" name="email" class="form-control" required autocomplete="off" value="<?= htmlspecialchars($email) ?>">
                 </div>
                 <div class="mb-3">
                     <label class="form-label">Password</label>

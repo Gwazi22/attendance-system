@@ -129,16 +129,17 @@ const CLOSING_SOON_WINDOW_SECONDS = 300; // 5 minutes
     <meta charset="UTF-8">
     <title>Lecturer Dashboard</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
 </head>
 <body>
 <nav class="navbar navbar-dark bg-dark px-3">
-    <span class="navbar-brand mb-0 h1">Attendance System — Lecturer</span>
+    <span class="navbar-brand mb-0 h1"><i class="bi bi-mortarboard-fill me-2"></i>Attendance System — Lecturer</span>
     <div class="d-flex align-items-center">
         <button class="btn btn-outline-light btn-sm me-2" onclick="toggleTheme()" title="Toggle dark mode">
             <span id="themeToggleIcon">🌙</span>
         </button>
         <span class="text-light me-3">Welcome, <?= htmlspecialchars($_SESSION["full_name"]) ?></span>
-        <a href="logout.php" class="btn btn-outline-light btn-sm">Logout</a>
+        <a href="logout.php" class="btn btn-outline-light btn-sm"><i class="bi bi-box-arrow-right me-1"></i>Logout</a>
     </div>
 </nav>
 
@@ -146,22 +147,22 @@ const CLOSING_SOON_WINDOW_SECONDS = 300; // 5 minutes
 
     <div class="card shadow-sm mb-4">
         <div class="card-body">
-            <h5 class="card-title mb-3">Add a Course</h5>
+            <h5 class="card-title mb-3"><i class="bi bi-journal-plus me-2"></i>Add a Course</h5>
             <form method="POST" action="lecturer_dashboard.php" class="row g-3">
                 <div class="col-md-4">
-                    <label class="form-label">Course Code</label>
+                    <label class="form-label"><i class="bi bi-book me-1"></i>Course Code</label>
                     <input type="text" name="course_code" class="form-control" placeholder="e.g. CSC401" required>
                 </div>
                 <div class="col-md-4">
-                    <label class="form-label">Course Title</label>
+                    <label class="form-label"><i class="bi bi-card-text me-1"></i>Course Title</label>
                     <input type="text" name="course_title" class="form-control" placeholder="e.g. Software Engineering" required>
                 </div>
                 <div class="col-md-2">
-                    <label class="form-label">Unit</label>
+                    <label class="form-label"><i class="bi bi-hash me-1"></i>Unit</label>
                     <input type="number" name="course_unit" class="form-control" min="1" max="6" value="3" required>
                 </div>
                 <div class="col-md-2 d-flex align-items-end">
-                    <button type="submit" name="add_course" class="btn btn-primary w-100">Add</button>
+                    <button type="submit" name="add_course" class="btn btn-primary w-100"><i class="bi bi-plus-lg me-1"></i>Add</button>
                 </div>
             </form>
         </div>
@@ -169,7 +170,7 @@ const CLOSING_SOON_WINDOW_SECONDS = 300; // 5 minutes
 
     <div class="card shadow-sm mb-4">
         <div class="card-body">
-            <h5 class="card-title mb-3">Start a New Attendance Session</h5>
+            <h5 class="card-title mb-3"><i class="bi bi-calendar-event me-2"></i>Start a New Attendance Session</h5>
 
             <?php if (empty($courses)): ?>
                 <p class="text-muted mb-0">
@@ -178,7 +179,7 @@ const CLOSING_SOON_WINDOW_SECONDS = 300; // 5 minutes
             <?php else: ?>
                 <form method="POST" action="lecturer_dashboard.php" class="row g-3">
                     <div class="col-md-6">
-                        <label class="form-label">Course</label>
+                        <label class="form-label"><i class="bi bi-journal-bookmark me-1"></i>Course</label>
                         <select name="course_id" class="form-select" required>
                             <option value="" selected disabled>-- Select a course --</option>
                             <?php foreach ($courses as $c): ?>
@@ -189,19 +190,19 @@ const CLOSING_SOON_WINDOW_SECONDS = 300; // 5 minutes
                         </select>
                     </div>
                     <div class="col-md-6">
-                        <label class="form-label">Date</label>
+                        <label class="form-label"><i class="bi bi-calendar3 me-1"></i>Date</label>
                         <input type="date" name="session_date" class="form-control" required>
                     </div>
                     <div class="col-md-6">
-                        <label class="form-label">Start Time</label>
+                        <label class="form-label"><i class="bi bi-clock me-1"></i>Start Time</label>
                         <input type="time" name="start_time" id="start_time" class="form-control" required>
                     </div>
                     <div class="col-md-6">
-                        <label class="form-label">End Time</label>
+                        <label class="form-label"><i class="bi bi-clock-history me-1"></i>End Time</label>
                         <input type="time" name="end_time" id="end_time" class="form-control" required>
                     </div>
                     <div class="col-12">
-                        <button type="submit" name="create_session" class="btn btn-primary">Start Session</button>
+                        <button type="submit" name="create_session" class="btn btn-primary"><i class="bi bi-play-fill me-1"></i>Start Session</button>
                     </div>
                 </form>
             <?php endif; ?>
@@ -210,7 +211,7 @@ const CLOSING_SOON_WINDOW_SECONDS = 300; // 5 minutes
 
     <div class="card shadow-sm">
         <div class="card-body">
-            <h5 class="card-title mb-3">Your Sessions</h5>
+            <h5 class="card-title mb-3"><i class="bi bi-list-check me-2"></i>Your Sessions</h5>
 
             <?php if (empty($sessions)): ?>
                 <p class="text-muted mb-0">No sessions created yet.</p>
@@ -261,7 +262,7 @@ const CLOSING_SOON_WINDOW_SECONDS = 300; // 5 minutes
                                             <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1"
                                                     onclick="copyElementText('<?= $join_code_dom_id ?>', 'Join code copied!')"
                                                     title="Copy join code">
-                                                📋
+                                                <i class="bi bi-clipboard"></i>
                                             </button>
                                         </div>
                                     <?php else: ?>
@@ -285,7 +286,7 @@ const CLOSING_SOON_WINDOW_SECONDS = 300; // 5 minutes
                                         <form method="POST" action="lecturer_dashboard.php" class="d-inline">
                                             <input type="hidden" name="session_id" value="<?= $s['session_id'] ?>">
                                             <button type="submit" name="close_session" class="btn btn-sm btn-outline-danger">
-                                                Close
+                                                <i class="bi bi-x-circle me-1"></i>Close
                                             </button>
                                         </form>
                                     <?php endif; ?>

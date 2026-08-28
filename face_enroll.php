@@ -11,7 +11,25 @@ require_once "auth_check.php";
     <script defer src="assets/facelib/face-api.min.js"></script>
     <style>
         #video { transform: scaleX(-1); }
-        #loadProgressBar { transition: width 0.15s linear; }
+
+        .progress-ring-wrap { position: relative; width: 80px; height: 80px; margin: 0 auto; }
+        .progress-ring-bg { stroke: #dee2e6; }
+        [data-bs-theme="dark"] .progress-ring-bg { stroke: #495057; }
+        .progress-ring-fg { stroke: #0d6efd; stroke-linecap: round; transition: stroke-dashoffset 0.15s linear; }
+        .progress-ring-label {
+            position: absolute; inset: 0;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: 600; font-size: 0.9rem;
+        }
+
+        .face-video-wrap { position: relative; display: inline-block; }
+        .face-oval-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        .face-oval-overlay ellipse {
+            fill: none; stroke: rgba(255,255,255,0.7); stroke-width: 3; stroke-dasharray: 8 6;
+            transition: stroke 0.2s ease, stroke-dasharray 0.2s ease, stroke-width 0.2s ease;
+        }
+        .face-oval-overlay ellipse.oval-good { stroke: #28a745; stroke-dasharray: none; stroke-width: 4; }
+        .face-oval-overlay ellipse.oval-bad { stroke: #ffc107; }
     </style>
 </head>
 <body>
@@ -32,8 +50,15 @@ require_once "auth_check.php";
                     <span id="statusText">Preparing…</span>
                     <span id="loaderTimer" class="text-muted small">0.0s</span>
                 </div>
-                <div class="progress" style="height: 8px;">
-                    <div id="loadProgressBar" class="progress-bar" role="progressbar" style="width: 0%"></div>
+                <div class="progress-ring-wrap my-2">
+                    <svg width="80" height="80" viewBox="0 0 80 80">
+                        <circle class="progress-ring-bg" cx="40" cy="40" r="34" stroke-width="7" fill="none"/>
+                        <circle id="loadProgressRing" class="progress-ring-fg" cx="40" cy="40" r="34" stroke-width="7" fill="none"
+                                stroke-dasharray="213.6" stroke-dashoffset="213.6" transform="rotate(-90 40 40)"/>
+                    </svg>
+                    <div class="progress-ring-label">
+                        <span id="loadProgressPct">0%</span>
+                    </div>
                 </div>
             </div>
 
@@ -45,7 +70,12 @@ require_once "auth_check.php";
             <!-- Dynamic live guidance (position, distance, lighting, possible obstruction) -->
             <div id="guideMsg" class="alert alert-secondary" style="display:none;"></div>
 
-            <video id="video" width="360" height="270" autoplay muted playsinline webkit-playsinline class="border rounded mb-3"></video>
+            <div class="face-video-wrap mb-3">
+                <video id="video" width="360" height="270" autoplay muted playsinline webkit-playsinline class="border rounded"></video>
+                <svg class="face-oval-overlay" viewBox="0 0 360 270" preserveAspectRatio="none">
+                    <ellipse id="faceOval" cx="180" cy="135" rx="95" ry="120"></ellipse>
+                </svg>
+            </div>
 
             <div>
                 <button id="captureBtn" class="btn btn-primary w-100" disabled>Capture Face</button>
@@ -65,7 +95,9 @@ const statusMsg = document.getElementById("statusMsg");
 const statusText = document.getElementById("statusText");
 const loaderTimer = document.getElementById("loaderTimer");
 const loaderWrap = document.getElementById("loaderWrap");
-const progressBar = document.getElementById("loadProgressBar");
+const loadProgressRing = document.getElementById("loadProgressRing");
+const loadProgressPct = document.getElementById("loadProgressPct");
+const RING_CIRCUMFERENCE = 2 * Math.PI * 34; // matches r="34" on the ring circle
 const guideMsg = document.getElementById("guideMsg");
 const captureBtn = document.getElementById("captureBtn");
 const resultMsg = document.getElementById("resultMsg");
@@ -108,7 +140,10 @@ function stopTimer() {
    milestone once that model actually finishes loading.
 --------------------------------------------------------- */
 function setProgress(pct) {
-    progressBar.style.width = Math.min(100, Math.max(0, pct)) + "%";
+    const clamped = Math.min(100, Math.max(0, pct));
+    const offset = RING_CIRCUMFERENCE - (clamped / 100) * RING_CIRCUMFERENCE;
+    loadProgressRing.style.strokeDashoffset = offset;
+    loadProgressPct.textContent = Math.round(clamped) + "%";
 }
 
 async function loadStep(promiseFn, fromPct, toPct, label) {
@@ -242,17 +277,26 @@ function evaluateFacePosition(detection, video) {
 }
 
 function startGuidance() {
+    const ovalEl = document.getElementById("faceOval");
     guideInterval = setInterval(async () => {
         if (!modelsLoaded || video.readyState < 2) return;
         const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions());
         if (!detection) {
             guideMsg.className = "alert alert-secondary";
             guideMsg.textContent = "No face detected — make sure your face is visible.";
+            ovalEl.classList.remove("oval-good", "oval-bad");
             return;
         }
         const status = evaluateFacePosition(detection, video);
         guideMsg.className = status.ok ? "alert alert-success" : "alert alert-secondary";
         guideMsg.textContent = status.message;
+        if (status.ok) {
+            ovalEl.classList.add("oval-good");
+            ovalEl.classList.remove("oval-bad");
+        } else {
+            ovalEl.classList.add("oval-bad");
+            ovalEl.classList.remove("oval-good");
+        }
     }, 400);
 }
 

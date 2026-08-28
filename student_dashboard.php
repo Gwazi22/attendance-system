@@ -122,6 +122,32 @@ $stmt->close();
     <script defer src="assets/facelib/face-api.min.js"></script>
     <style>
         #checkinVideo { transform: scaleX(-1); }
+
+        .progress-ring-wrap { position: relative; width: 80px; height: 80px; margin: 0 auto; }
+        .progress-ring-bg { stroke: #dee2e6; }
+        [data-bs-theme="dark"] .progress-ring-bg { stroke: #495057; }
+        .progress-ring-fg { stroke: #0d6efd; stroke-linecap: round; transition: stroke-dashoffset 0.15s linear; }
+        .progress-ring-label {
+            position: absolute; inset: 0;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: 600; font-size: 0.9rem;
+        }
+
+        .face-video-wrap { position: relative; display: inline-block; }
+        .face-oval-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        .face-oval-overlay ellipse {
+            fill: none; stroke: rgba(255,255,255,0.7); stroke-width: 3; stroke-dasharray: 8 6;
+            transition: stroke 0.2s ease, stroke-dasharray 0.2s ease, stroke-width 0.2s ease;
+        }
+        .face-oval-overlay ellipse.oval-good { stroke: #28a745; stroke-dasharray: none; stroke-width: 4; }
+        .face-oval-overlay ellipse.oval-bad { stroke: #ffc107; }
+
+        @keyframes scanPulse {
+            0%   { box-shadow: 0 0 0 0 rgba(13,110,253,0.55); }
+            70%  { box-shadow: 0 0 0 14px rgba(13,110,253,0); }
+            100% { box-shadow: 0 0 0 0 rgba(13,110,253,0); }
+        }
+        .scanning-active { animation: scanPulse 1.4s infinite; border-radius: 0.375rem; }
     </style>
 </head>
 <body>
@@ -147,7 +173,14 @@ $stmt->close();
 
     <div class="card shadow-sm mb-4">
         <div class="card-body">
-            <h5 class="card-title mb-3">Check In to a Session</h5>
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="card-title mb-0">Check In to a Session</h5>
+                <?php if ($has_face_profile): ?>
+                    <span class="badge bg-success">✅ Face Enrolled</span>
+                <?php else: ?>
+                    <span class="badge bg-warning text-dark">⚠️ Not Enrolled</span>
+                <?php endif; ?>
+            </div>
             <p class="text-muted">
                 Make sure you're connected to your lecturer's WiFi hotspot before checking in.
             </p>
@@ -165,13 +198,35 @@ $stmt->close();
                 <input type="hidden" name="face_verified" id="face_verified" value="0">
             </form>
 
+            <div id="sessionCard" class="alert alert-primary mt-3 d-flex justify-content-between align-items-center" style="display:none;">
+                <span id="sessionCardText"></span>
+                <span id="sessionCountdown" class="fw-bold"></span>
+            </div>
+
             <div id="faceCheckSection" class="mt-3" style="display:none;">
                 <div id="facePrompt" class="alert alert-info">
                     Now position your face in the frame, then tap "Start Verification" below.
                 </div>
                 <button type="button" id="startVerifyBtn" class="btn btn-primary mb-2">Start Verification</button>
-                <div>
-                    <video id="checkinVideo" width="320" height="240" autoplay muted playsinline webkit-playsinline class="border rounded mb-2" style="display:none;"></video>
+
+                <div id="modelLoadRing" class="my-2" style="display:none;">
+                    <div class="progress-ring-wrap">
+                        <svg width="80" height="80" viewBox="0 0 80 80">
+                            <circle class="progress-ring-bg" cx="40" cy="40" r="34" stroke-width="7" fill="none"/>
+                            <circle id="progressRingCircle" class="progress-ring-fg" cx="40" cy="40" r="34" stroke-width="7" fill="none"
+                                    stroke-dasharray="213.6" stroke-dashoffset="213.6" transform="rotate(-90 40 40)"/>
+                        </svg>
+                        <div class="progress-ring-label">
+                            <span id="progressRingPct">0%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="face-video-wrap" style="display:none;" id="checkinVideoWrap">
+                    <video id="checkinVideo" width="320" height="240" autoplay muted playsinline webkit-playsinline class="border rounded"></video>
+                    <svg class="face-oval-overlay" viewBox="0 0 320 240" preserveAspectRatio="none">
+                        <ellipse id="checkinOval" cx="160" cy="120" rx="85" ry="105"></ellipse>
+                    </svg>
                 </div>
                 <div id="faceStatus" class="alert alert-info" style="display:none;">Loading...</div>
             </div>
@@ -220,12 +275,46 @@ let modelsLoaded = false;
 let modelsLoadingPromise = null;
 let faceAlreadyVerified = false;
 
-// Preload models silently as soon as the dashboard opens — only if student has a face profile
+/* ---------------------------------------------------------
+   Progress ring (shown only if models aren't already cached/loaded
+   by the time the student taps "Start Verification")
+--------------------------------------------------------- */
+const RING_CIRCUMFERENCE = 2 * Math.PI * 34; // matches r="34" on the ring circle
+
+function setRingProgress(pct) {
+    const circle = document.getElementById("progressRingCircle");
+    const label = document.getElementById("progressRingPct");
+    if (!circle || !label) return;
+    const clamped = Math.min(100, Math.max(0, pct));
+    const offset = RING_CIRCUMFERENCE - (clamped / 100) * RING_CIRCUMFERENCE;
+    circle.style.strokeDashoffset = offset;
+    label.textContent = Math.round(clamped) + "%";
+}
+
+async function loadStepWithRing(promiseFn, fromPct, toPct) {
+    let current = fromPct;
+    const ceiling = fromPct + (toPct - fromPct) * 0.9;
+    const tick = setInterval(() => {
+        current += (ceiling - current) * 0.08;
+        setRingProgress(current);
+    }, 120);
+    try {
+        await promiseFn();
+    } finally {
+        clearInterval(tick);
+    }
+    setRingProgress(toPct);
+}
+
+// Preload models silently as soon as the dashboard opens — only if student has a face profile.
+// Uses the same weighted-step ring progress as face_enroll.php so the two
+// flows feel consistent, even though this one usually finishes instantly
+// since the models are likely already browser-cached from enrollment.
 function preloadModels() {
     modelsLoadingPromise = (async () => {
-        await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-        await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-        await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+        await loadStepWithRing(() => faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL), 0, 8);
+        await loadStepWithRing(() => faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL), 8, 20);
+        await loadStepWithRing(() => faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL), 20, 100);
         modelsLoaded = true;
     })();
 }
@@ -254,9 +343,16 @@ function evaluateFacePosition(detection, video) {
 async function runFaceVerification() {
     const section = document.getElementById("faceCheckSection");
     const statusEl = document.getElementById("faceStatus");
+    const ringWrap = document.getElementById("modelLoadRing");
     section.style.display = "block";
     statusEl.className = "alert alert-info";
-    statusEl.textContent = "Loading face models...";
+
+    if (!modelsLoaded) {
+        ringWrap.style.display = "block";
+        statusEl.textContent = "Loading face models...";
+    } else {
+        statusEl.textContent = "Starting camera...";
+    }
 
     // FIX: wrapped in try/catch so a load failure shows a clear message
     // instead of hanging forever on "Loading face models..."
@@ -264,12 +360,17 @@ async function runFaceVerification() {
         if (!modelsLoadingPromise) preloadModels();
         await modelsLoadingPromise;
     } catch (err) {
+        ringWrap.style.display = "none";
         statusEl.className = "alert alert-danger";
         statusEl.textContent = "Failed to load face models. Please refresh the page and try again.";
         return false;
     }
+    ringWrap.style.display = "none";
 
+    const videoWrap = document.getElementById("checkinVideoWrap");
     const video = document.getElementById("checkinVideo");
+    const ovalEl = document.getElementById("checkinOval");
+    videoWrap.style.display = "inline-block";
     let stream;
     try {
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
@@ -303,29 +404,55 @@ async function runFaceVerification() {
     const maxAttempts = 40;
     let attempts = 0;
 
+    // Visible "actively scanning" pulse — even on frames where the status
+    // text doesn't change, this makes it clear the loop is still running
+    // rather than looking frozen.
+    videoWrap.classList.add("scanning-active");
+
     while (attempts < maxAttempts) {
         attempts++;
-        const d = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions());
+        let d = null;
+        try {
+            // FIX: previously an uncaught error here (e.g. a transient
+            // WebGL/tensor hiccup on some devices) would throw out of the
+            // whole async function with nothing to catch it — the loop
+            // just died silently, leaving the camera frozen on screen and
+            // the "Verifying..." button stuck forever with zero feedback.
+            // Now a single bad frame is treated as "no face this frame"
+            // and the loop keeps going instead of crashing outright.
+            d = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions());
+        } catch (frameErr) {
+            console.warn("Face detection error on this frame:", frameErr);
+            d = null;
+        }
+
         if (!d) {
             statusEl.className = "alert alert-secondary";
             statusEl.textContent = "No face detected — make sure your face is visible.";
             stableGoodCount = 0;
+            ovalEl.classList.remove("oval-good", "oval-bad");
         } else {
             const status = evaluateFacePosition(d, video);
             statusEl.className = status.ok ? "alert alert-success" : "alert alert-secondary";
             statusEl.textContent = status.message;
             if (status.ok) {
+                ovalEl.classList.add("oval-good");
+                ovalEl.classList.remove("oval-bad");
                 stableGoodCount++;
                 if (stableGoodCount >= 3) {
                     detection = d;
                     break;
                 }
             } else {
+                ovalEl.classList.add("oval-bad");
+                ovalEl.classList.remove("oval-good");
                 stableGoodCount = 0;
             }
         }
         await new Promise(resolve => setTimeout(resolve, 300));
     }
+
+    videoWrap.classList.remove("scanning-active");
 
     if (!detection) {
         stream.getTracks().forEach(track => track.stop());
@@ -337,10 +464,19 @@ async function runFaceVerification() {
     statusEl.className = "alert alert-info";
     statusEl.textContent = "Capturing...";
 
-    const fullDetection = await faceapi
-        .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
-        .withFaceLandmarks()
-        .withFaceDescriptor();
+    let fullDetection = null;
+    try {
+        fullDetection = await faceapi
+            .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+    } catch (captureErr) {
+        console.warn("Final capture detection error:", captureErr);
+        stream.getTracks().forEach(track => track.stop());
+        statusEl.className = "alert alert-danger";
+        statusEl.textContent = "Something went wrong capturing your face. Please try again.";
+        return false;
+    }
 
     stream.getTracks().forEach(track => track.stop());
 
@@ -379,26 +515,99 @@ async function runFaceVerification() {
 
 const checkinForm = document.getElementById("checkinForm");
 const startVerifyBtn = document.getElementById("startVerifyBtn");
+const sessionCard = document.getElementById("sessionCard");
+const sessionCardText = document.getElementById("sessionCardText");
+const sessionCountdown = document.getElementById("sessionCountdown");
+
+let countdownInterval = null;
+
+function stopCountdown() {
+    if (countdownInterval) {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+    }
+}
+
+function startCountdown(secondsRemaining) {
+    stopCountdown();
+    let remaining = secondsRemaining;
+
+    function render() {
+        if (remaining <= 0) {
+            sessionCountdown.textContent = "Closed";
+            sessionCountdown.className = "fw-bold text-danger";
+            stopCountdown();
+            showToast("This session has just closed. Please check with your lecturer.", "danger");
+            // Reset the check-in flow since the session is no longer valid
+            document.getElementById("checkinBtn").disabled = false;
+            document.getElementById("join_code").disabled = false;
+            document.getElementById("faceCheckSection").style.display = "none";
+            return;
+        }
+        const mins = Math.floor(remaining / 60);
+        const secs = remaining % 60;
+        sessionCountdown.textContent = "Closes in " + mins + ":" + String(secs).padStart(2, "0");
+        sessionCountdown.className = remaining <= 60 ? "fw-bold text-danger" : "fw-bold";
+        remaining--;
+    }
+
+    render();
+    countdownInterval = setInterval(render, 1000);
+}
 
 if (checkinForm) {
-    checkinForm.addEventListener("submit", function(e) {
+    checkinForm.addEventListener("submit", async function(e) {
         // Entering the join code and hitting "Check In" no longer
-        // auto-starts the camera. Instead we reveal a prompt and wait for
-        // an explicit "Start Verification" tap — avoids surprising students
-        // with an instant camera popup and gives a clear cue on what to do.
+        // auto-starts the camera. We first look up the session (course
+        // name + time remaining) so the student can see what they're
+        // checking into and how much time is left, THEN reveal the
+        // "position your face" prompt — the camera itself still only
+        // starts on an explicit "Start Verification" tap.
         if (faceAlreadyVerified) return;
         e.preventDefault();
 
         const btn = document.getElementById("checkinBtn");
         const joinCodeInput = document.getElementById("join_code");
-        btn.disabled = true;
-        joinCodeInput.disabled = true;
+        const joinCode = joinCodeInput.value.trim();
 
-        document.getElementById("faceCheckSection").style.display = "block";
-        document.getElementById("facePrompt").style.display = "block";
-        startVerifyBtn.style.display = "inline-block";
-        startVerifyBtn.disabled = false;
-        startVerifyBtn.textContent = "Start Verification";
+        if (!joinCode) return;
+
+        btn.disabled = true;
+        btn.textContent = "Checking...";
+
+        try {
+            const response = await fetch("session_lookup.php", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: "join_code=" + encodeURIComponent(joinCode)
+            });
+            const result = await response.json();
+
+            btn.textContent = "Check In";
+
+            if (!result.success) {
+                btn.disabled = false;
+                showToast(result.message || "Invalid join code.", "danger");
+                return;
+            }
+
+            joinCodeInput.disabled = true;
+            btn.disabled = true;
+
+            sessionCardText.textContent = result.course_code + " — " + result.course_title;
+            sessionCard.style.display = "flex";
+            startCountdown(result.seconds_remaining);
+
+            document.getElementById("faceCheckSection").style.display = "block";
+            document.getElementById("facePrompt").style.display = "block";
+            startVerifyBtn.style.display = "inline-block";
+            startVerifyBtn.disabled = false;
+            startVerifyBtn.textContent = "Start Verification";
+        } catch (err) {
+            btn.disabled = false;
+            btn.textContent = "Check In";
+            showToast("Could not reach the server. Please try again.", "danger");
+        }
     });
 }
 
@@ -415,6 +624,7 @@ if (startVerifyBtn) {
         if (verified) {
             document.getElementById("face_verified").value = "1";
             faceAlreadyVerified = true;
+            stopCountdown();
             checkinForm.submit();
         } else {
             document.getElementById("facePrompt").style.display = "block";

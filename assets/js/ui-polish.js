@@ -15,6 +15,11 @@
 
     function applyTheme(theme) {
         document.documentElement.setAttribute("data-bs-theme", theme);
+        // Also set the native color-scheme so browser-rendered controls —
+        // date/time picker icons, scrollbars, etc. — switch to their light
+        // or dark native variant instead of staying black-on-dark (or
+        // vice versa) regardless of our Bootstrap theme.
+        document.documentElement.style.colorScheme = theme;
         const icon = document.getElementById("themeToggleIcon");
         if (icon) {
             icon.textContent = theme === "dark" ? "☀️" : "🌙";
