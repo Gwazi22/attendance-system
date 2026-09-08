@@ -148,6 +148,43 @@ $stmt->close();
             100% { box-shadow: 0 0 0 0 rgba(13,110,253,0); }
         }
         .scanning-active { animation: scanPulse 1.4s infinite; border-radius: 0.375rem; }
+
+        .result-overlay {
+            position: absolute; inset: 0;
+            display: flex; align-items: center; justify-content: center;
+            background: rgba(0,0,0,0.35);
+            pointer-events: none;
+            border-radius: 0.375rem;
+        }
+        .result-circle { fill: none; stroke-width: 3; stroke-dasharray: 145; stroke-dashoffset: 145; }
+        .result-circle.success { stroke: #28a745; }
+        .result-circle.failure { stroke: #dc3545; }
+        .result-check, .result-cross {
+            fill: none; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round;
+            stroke-dasharray: 50; stroke-dashoffset: 50;
+        }
+        .result-check { stroke: #28a745; }
+        .result-cross { stroke: #dc3545; }
+
+        @keyframes iconPop {
+            0% { transform: scale(0.4); opacity: 0; }
+            60% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        @keyframes drawPath { to { stroke-dashoffset: 0; } }
+        @keyframes shakeX {
+            0%, 100% { transform: translateX(0); }
+            20% { transform: translateX(-6px); }
+            40% { transform: translateX(6px); }
+            60% { transform: translateX(-4px); }
+            80% { transform: translateX(4px); }
+        }
+
+        .result-icon-anim { animation: iconPop 0.3s ease-out forwards; }
+        .result-icon-anim .result-circle { animation: drawPath 0.4s ease-out forwards; }
+        .result-icon-anim .result-check,
+        .result-icon-anim .result-cross { animation: drawPath 0.25s 0.3s ease-out forwards; }
+        .result-icon-anim.shake-fail { animation: iconPop 0.3s ease-out forwards, shakeX 0.4s 0.35s ease-in-out; }
     </style>
 </head>
 <body>
@@ -227,6 +264,17 @@ $stmt->close();
                     <svg class="face-oval-overlay" viewBox="0 0 320 240" preserveAspectRatio="none">
                         <ellipse id="checkinOval" cx="160" cy="120" rx="85" ry="105"></ellipse>
                     </svg>
+                    <div id="resultOverlay" class="result-overlay" style="display:none;">
+                        <svg id="resultSuccessGroup" class="result-icon-anim" viewBox="0 0 52 52" width="72" height="72" style="display:none;">
+                            <circle class="result-circle success" cx="26" cy="26" r="23"/>
+                            <path class="result-check" d="M14 27l7 7 16-16"/>
+                        </svg>
+                        <svg id="resultFailureGroup" class="result-icon-anim" viewBox="0 0 52 52" width="72" height="72" style="display:none;">
+                            <circle class="result-circle failure" cx="26" cy="26" r="23"/>
+                            <path class="result-cross" d="M16 16 L36 36"/>
+                            <path class="result-cross" d="M36 16 L16 36"/>
+                        </svg>
+                    </div>
                 </div>
                 <div id="faceStatus" class="alert alert-info" style="display:none;">Loading...</div>
             </div>
@@ -324,6 +372,34 @@ function preloadModels() {
 <?php if ($has_face_profile): ?>
 window.addEventListener('load', preloadModels);
 <?php endif; ?>
+
+// Shows a brief animated checkmark (success) or X (failure) over the video
+// feed at the moment verification actually resolves — gives immediate,
+// unmistakable feedback instead of the wait just quietly ending.
+function showResultOverlay(type) {
+    const overlay = document.getElementById("resultOverlay");
+    const successGroup = document.getElementById("resultSuccessGroup");
+    const failureGroup = document.getElementById("resultFailureGroup");
+
+    overlay.style.display = "flex";
+
+    const activeGroup = type === "success" ? successGroup : failureGroup;
+    const inactiveGroup = type === "success" ? failureGroup : successGroup;
+
+    inactiveGroup.style.display = "none";
+    activeGroup.style.display = "block";
+
+    // Restart the CSS animation even if it was already played once this session
+    activeGroup.classList.remove("result-icon-anim", "shake-fail");
+    void activeGroup.offsetWidth; // force reflow so the animation restarts
+    activeGroup.classList.add("result-icon-anim");
+    if (type === "failure") activeGroup.classList.add("shake-fail");
+
+    return new Promise(resolve => setTimeout(() => {
+        overlay.style.display = "none";
+        resolve();
+    }, 900));
+}
 
 function evaluateFacePosition(detection, video) {
     const box = detection.detection.box;
@@ -458,6 +534,7 @@ async function runFaceVerification() {
         stream.getTracks().forEach(track => track.stop());
         statusEl.className = "alert alert-danger";
         statusEl.textContent = "Could not get a stable face position. Please try again.";
+        await showResultOverlay("failure");
         return false;
     }
 
@@ -483,6 +560,7 @@ async function runFaceVerification() {
     if (!fullDetection) {
         statusEl.className = "alert alert-danger";
         statusEl.textContent = "No face detected. Please try again.";
+        await showResultOverlay("failure");
         return false;
     }
 
@@ -499,16 +577,19 @@ async function runFaceVerification() {
     } catch (err) {
         statusEl.className = "alert alert-danger";
         statusEl.textContent = "Error contacting server. Please try again.";
+        await showResultOverlay("failure");
         return false;
     }
 
     if (result.match) {
         statusEl.className = "alert alert-success";
         statusEl.textContent = "Face verified! Submitting attendance...";
+        await showResultOverlay("success");
         return true;
     } else {
         statusEl.className = "alert alert-danger";
         statusEl.textContent = result.message || "Face verification failed.";
+        await showResultOverlay("failure");
         return false;
     }
 }
