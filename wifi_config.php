@@ -18,6 +18,7 @@ $allowed_ip_prefixes = [
     "192.168.1.",       // common home/office router range
     "192.168.43.",      // common home/office router range
     "192.168.97.",      // common home/office router range
+    "192.168.136.",     // common home/office router range
 ];
 
 /**
