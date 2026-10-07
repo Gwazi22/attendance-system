@@ -6,6 +6,7 @@ require_once "wifi_config.php";
 $student_id = $_SESSION["user_id"];
 $error = "";
 $success = "";
+$last_checkin = null; // set on a successful check-in, used to render the Success screen
 
 function get_client_ip() {
     if (!empty($_SERVER['HTTP_CLIENT_IP'])) {
@@ -95,6 +96,12 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["join_code"])) {
 
                         if ($insert->execute()) {
                             $success = "You're marked present for " . $session['course_code'] . " — " . $session['course_title'] . ".";
+                            $last_checkin = [
+                                'course_code'  => $session['course_code'],
+                                'course_title' => $session['course_title'],
+                                'time'         => date('Y-m-d H:i:s'),
+                                'status'       => 'present',
+                            ];
                         } else {
                             $error = "Something went wrong recording your attendance. Please try again.";
                         }
@@ -108,6 +115,39 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["join_code"])) {
     }
 }
 
+$show_success = ($success !== "" && $last_checkin !== null);
+
+// --- Profile info (email, matric number) for the Profile tab -----------
+$profile = ['email' => '', 'matric_number' => ''];
+$pstmt = $conn->prepare("SELECT email, matric_number FROM users WHERE user_id = ?");
+$pstmt->bind_param("i", $student_id);
+$pstmt->execute();
+$prow = $pstmt->get_result()->fetch_assoc();
+if ($prow) {
+    $profile = $prow;
+}
+$pstmt->close();
+
+// --- Courses tab: distinct courses this student has checked into, with a
+// check-in count and the most recent check-in date. ---------------------
+$my_courses = [];
+$mc_stmt = $conn->prepare(
+    "SELECT c.course_id, c.course_code, c.course_title, COUNT(*) AS checkins, MAX(r.marked_at) AS last_seen
+     FROM attendance_records r
+     JOIN attendance_sessions s ON r.session_id = s.session_id
+     JOIN courses c ON s.course_id = c.course_id
+     WHERE r.student_id = ?
+     GROUP BY c.course_id, c.course_code, c.course_title
+     ORDER BY c.course_code"
+);
+$mc_stmt->bind_param("i", $student_id);
+$mc_stmt->execute();
+$mc_result = $mc_stmt->get_result();
+while ($row = $mc_result->fetch_assoc()) {
+    $my_courses[] = $row;
+}
+$mc_stmt->close();
+
 // --- Attendance history filters (course + date range) -----------------
 // Uses GET so results are bookmarkable/shareable and don't interfere with
 // the POST check-in form above.
@@ -115,26 +155,6 @@ $filter_course_id = isset($_GET['filter_course']) ? intval($_GET['filter_course'
 $filter_date_from = $_GET['filter_from'] ?? '';
 $filter_date_to   = $_GET['filter_to'] ?? '';
 $has_filters = ($filter_course_id > 0) || !empty($filter_date_from) || !empty($filter_date_to);
-
-// Courses this student has at least one attendance record for — populates
-// the course filter dropdown. Not the same as "enrolled courses" (this
-// system doesn't track enrolment separately; attendance is join-code based).
-$student_courses = [];
-$sc_stmt = $conn->prepare(
-    "SELECT DISTINCT c.course_id, c.course_code
-     FROM attendance_records r
-     JOIN attendance_sessions s ON r.session_id = s.session_id
-     JOIN courses c ON s.course_id = c.course_id
-     WHERE r.student_id = ?
-     ORDER BY c.course_code"
-);
-$sc_stmt->bind_param("i", $student_id);
-$sc_stmt->execute();
-$sc_result = $sc_stmt->get_result();
-while ($row = $sc_result->fetch_assoc()) {
-    $student_courses[] = $row;
-}
-$sc_stmt->close();
 
 $history_sql = "SELECT r.marked_at, r.status, c.course_code, c.course_title
                 FROM attendance_records r
@@ -161,9 +181,7 @@ if (!empty($filter_date_to)) {
 }
 
 $history_sql .= " ORDER BY r.marked_at DESC";
-// Default view stays capped at 10 (unchanged prior behavior); once any
-// filter is applied, show up to 200 matching records instead.
-$history_sql .= $has_filters ? " LIMIT 200" : " LIMIT 10";
+$history_sql .= $has_filters ? " LIMIT 200" : " LIMIT 50";
 
 $history = [];
 $stmt = $conn->prepare($history_sql);
@@ -174,507 +192,563 @@ while ($row = $result->fetch_assoc()) {
     $history[] = $row;
 }
 $stmt->close();
+
+$recent_history = array_slice($history, 0, 3);
+
+$hour = (int)date("G");
+$greeting = $hour < 12 ? "Good morning" : ($hour < 17 ? "Good afternoon" : "Good evening");
+$first_name = trim(explode(" ", $_SESSION["full_name"])[0]);
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Student Dashboard · MAU Smart Attendance</title>
+    <title><?= $show_success ? "Attendance Recorded" : "Dashboard" ?> · AttendX</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="assets/css/theme.css">
+    <script src="assets/js/theme.js"></script>
     <script defer src="assets/facelib/face-api.min.js"></script>
-    <style>
-        :root {
-            --navy-950: #060e1a;
-            --navy-900: #0b1a2c;
-            --navy-800: #122540;
-            --blue-600: #1e5799;
-            --blue-400: #4f8fd6;
-            --amber-500: #d9722c;
-            --amber-400: #eb9856;
-            --cream-300: #e9c98a;
-            --ink-050: #f4f7fb;
-            --ink-300: #b7c4d6;
-            --ink-500: #7f8fa6;
-            --glass-fill: rgba(20, 36, 58, 0.46);
-            --glass-fill-soft: rgba(20, 36, 58, 0.28);
-            --glass-border: rgba(255, 255, 255, 0.12);
-            --danger: #e5694f;
-            --success: #4fbf8b;
-            --radius: 18px;
-        }
-        * { box-sizing: border-box; }
-        html, body { margin: 0; font-family: 'Inter', system-ui, sans-serif; color: var(--ink-050); background: var(--navy-950); }
-        body { min-height: 100vh; position: relative; }
-
-        .field-bg {
-            position: fixed; inset: 0; z-index: 0; overflow: hidden;
-            background:
-                radial-gradient(circle at 12% 8%, rgba(30,87,153,0.30), transparent 40%),
-                radial-gradient(circle at 90% 85%, rgba(217,114,44,0.22), transparent 42%),
-                linear-gradient(160deg, var(--navy-950) 0%, var(--navy-900) 55%, #0d1f34 100%);
-        }
-        .field-bg::before {
-            content: ""; position: absolute; inset: -1px;
-            background-image: linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
-            background-size: 42px 42px;
-            mask-image: radial-gradient(ellipse at top, black 0%, transparent 78%);
-        }
-        html[data-theme="light"] {
-            --navy-950: #eef1f6; --navy-900: #ffffff; --navy-800: #e3e8f0;
-            --ink-050: #16233a; --ink-300: #48566e; --ink-500: #6d7c93;
-            --glass-fill: rgba(255, 255, 255, 0.62); --glass-fill-soft: rgba(255,255,255,0.4);
-            --glass-border: rgba(20, 40, 70, 0.10);
-        }
-        html[data-theme="light"] .field-bg {
-            background:
-                radial-gradient(circle at 12% 8%, rgba(30,87,153,0.12), transparent 40%),
-                radial-gradient(circle at 90% 85%, rgba(217,114,44,0.12), transparent 42%),
-                linear-gradient(160deg, #f3f5f9 0%, #eef1f6 60%, #eaeef4 100%);
-        }
-        html[data-theme="light"] .field-bg::before { background-image: linear-gradient(rgba(20,40,70,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(20,40,70,0.035) 1px, transparent 1px); }
-
-        /* ---------- navbar ---------- */
-        .topbar {
-            position: sticky; top: 0; z-index: 20;
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 12px 24px;
-            background: var(--glass-fill);
-            border-bottom: 1px solid var(--glass-border);
-            backdrop-filter: blur(18px) saturate(140%);
-            -webkit-backdrop-filter: blur(18px) saturate(140%);
-        }
-        .brand-row { display: flex; align-items: center; gap: 12px; }
-        .badge-ring {
-            width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
-            background: conic-gradient(from 200deg, var(--blue-600), var(--blue-400) 35%, var(--amber-400) 65%, var(--amber-500) 100%);
-            padding: 2px;
-        }
-        .badge-ring span {
-            display: flex; width: 100%; height: 100%; border-radius: 50%;
-            background: var(--navy-900); align-items: center; justify-content: center;
-            font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 13px; color: var(--ink-050);
-        }
-        .brand-text .eyebrow { font-size: 11.5px; color: var(--ink-500); }
-        .brand-text .name { font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 14.5px; }
-        .topbar-right { display: flex; align-items: center; gap: 14px; }
-        .welcome-text { font-size: 13.5px; color: var(--ink-300); }
-        .welcome-text strong { color: var(--ink-050); font-weight: 600; }
-
-        .theme-switch {
-            appearance: none; -webkit-appearance: none;
-            width: 56px; height: 30px; border-radius: 999px;
-            border: 1px solid var(--glass-border); background: var(--navy-800);
-            position: relative; cursor: pointer; outline-offset: 3px; transition: background 0.25s ease; flex-shrink: 0;
-        }
-        .theme-switch::before {
-            content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%;
-            background: var(--ink-050); transition: transform 0.25s ease; box-shadow: 0 2px 6px rgba(0,0,0,0.35);
-        }
-        .theme-switch .icon-sun, .theme-switch .icon-moon { position: absolute; top: 50%; transform: translateY(-50%); width: 12px; height: 12px; pointer-events: none; }
-        .theme-switch .icon-moon { left: 7px; color: var(--cream-300); }
-        .theme-switch .icon-sun { right: 7px; color: var(--amber-400); }
-        .theme-switch[data-theme="light"]::before { transform: translateX(26px); }
-
-        .btn-ghost {
-            display: inline-flex; align-items: center; gap: 6px;
-            padding: 7px 14px; border-radius: 10px; font-size: 13px; font-weight: 500;
-            border: 1px solid var(--glass-border); background: rgba(255,255,255,0.04);
-            color: var(--ink-050); text-decoration: none; cursor: pointer;
-            transition: background 0.15s ease;
-        }
-        .btn-ghost:hover { background: rgba(255,255,255,0.08); }
-
-        /* ---------- layout ---------- */
-        .page { position: relative; z-index: 1; max-width: 760px; margin: 0 auto; padding: 28px 20px 60px; }
-
-        .card {
-            background: var(--glass-fill);
-            border: 1px solid var(--glass-border);
-            border-radius: var(--radius);
-            padding: 24px 24px 22px;
-            backdrop-filter: blur(20px) saturate(140%);
-            -webkit-backdrop-filter: blur(20px) saturate(140%);
-            box-shadow: 0 20px 50px rgba(4, 10, 20, 0.28);
-            margin-bottom: 22px;
-        }
-        .card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }
-        .card h2 { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 17.5px; margin: 0; }
-        .card .lede { margin: 10px 0 18px; font-size: 13.5px; color: var(--ink-300); }
-
-        /* ---------- alerts / status / toast (also driven directly by JS classNames) ---------- */
-        .alert {
-            display: flex; align-items: center; justify-content: space-between; gap: 10px;
-            border-radius: 12px; padding: 11px 14px; font-size: 13.5px; margin-top: 6px; margin-bottom: 14px;
-        }
-        .alert-info     { background: rgba(79,143,214,0.14);  border: 1px solid rgba(79,143,214,0.35);  color: #bcd6f5; }
-        .alert-success  { background: rgba(79,191,139,0.14);  border: 1px solid rgba(79,191,139,0.35);  color: #a8ecc9; }
-        .alert-danger   { background: rgba(229,105,79,0.14);  border: 1px solid rgba(229,105,79,0.35);  color: #ffb9a4; }
-        .alert-secondary{ background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border);    color: var(--ink-300); }
-        .alert-primary  { background: rgba(79,143,214,0.14);  border: 1px solid rgba(79,143,214,0.35);  color: #bcd6f5; }
-        .alert-warning  { background: rgba(217,114,44,0.14);  border: 1px solid rgba(217,114,44,0.35);  color: var(--cream-300); }
-        html[data-theme="light"] .alert-info      { color: #1e5799; }
-        html[data-theme="light"] .alert-success   { color: #216b47; }
-        html[data-theme="light"] .alert-danger    { color: #a53a22; }
-        html[data-theme="light"] .alert-primary   { color: #1e5799; }
-        html[data-theme="light"] .alert-warning   { color: #8a4c1c; }
-        .fw-bold { font-weight: 700; }
-        .text-danger { color: var(--danger) !important; }
-
-        /* ---------- enrollment nudge ---------- */
-        .enroll-nudge {
-            display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
-            background: rgba(217,114,44,0.14); border: 1px solid rgba(217,114,44,0.35);
-            color: var(--cream-300); border-radius: 14px; padding: 13px 16px; margin-bottom: 22px; font-size: 13.5px;
-        }
-        html[data-theme="light"] .enroll-nudge { color: #8a4c1c; }
-        .pill-btn {
-            flex-shrink: 0; padding: 7px 14px; border-radius: 999px; border: none; font-size: 12.5px; font-weight: 600;
-            color: #fff; text-decoration: none; background: linear-gradient(120deg, var(--blue-600), var(--amber-500));
-        }
-
-        /* ---------- badges ---------- */
-        .chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
-        .chip-success { background: rgba(79,191,139,0.18); color: #7fe0b3; }
-        .chip-warning { background: rgba(217,114,44,0.18); color: var(--cream-300); }
-        html[data-theme="light"] .chip-success { color: #1c7a4c; }
-        html[data-theme="light"] .chip-warning { color: #8a4c1c; }
-
-        /* ---------- form fields ---------- */
-        label { display: block; font-size: 12px; font-weight: 500; color: var(--ink-300); margin-bottom: 6px; }
-        input[type="text"], input[type="date"], select {
-            width: 100%; padding: 11px 13px; border-radius: 11px;
-            border: 1px solid var(--glass-border); background: rgba(255,255,255,0.05);
-            color: var(--ink-050); font-size: 14px; font-family: 'Inter', sans-serif;
-        }
-        html[data-theme="light"] input[type="text"], html[data-theme="light"] input[type="date"], html[data-theme="light"] select { background: rgba(20,40,70,0.035); }
-        input::placeholder { color: var(--ink-500); }
-        input:focus, select:focus { outline: none; border-color: var(--blue-400); box-shadow: 0 0 0 3px rgba(79,143,214,0.22); }
-        input:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
-        select { appearance: none; -webkit-appearance: none; cursor: pointer; }
-
-        .checkin-row { display: flex; gap: 10px; }
-        .checkin-row input { flex: 1; text-align: center; font-size: 18px; letter-spacing: 0.15em; font-weight: 600; }
-        .checkin-row button { flex: 0 0 130px; }
-
-        .btn-primary, .btn-success {
-            border: none; border-radius: 11px; padding: 12px 16px; font-weight: 600; font-size: 14px; color: #fff;
-            cursor: pointer; transition: transform 0.12s ease, box-shadow 0.12s ease, opacity 0.15s ease;
-        }
-        .btn-primary { background: linear-gradient(120deg, var(--blue-600), var(--blue-400)); box-shadow: 0 10px 22px rgba(30,87,153,0.28); }
-        .btn-success { background: linear-gradient(120deg, #2e9f6d, var(--success)); box-shadow: 0 10px 22px rgba(79,191,139,0.25); }
-        .btn-primary:hover:not(:disabled), .btn-success:hover:not(:disabled) { transform: translateY(-1px); }
-        .btn-primary:disabled, .btn-success:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
-
-        .filter-row { display: grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap: 8px; margin-bottom: 16px; }
-        .filter-row button { padding: 10px 14px; border-radius: 11px; border: none; font-size: 13px; font-weight: 600; color: #fff; background: linear-gradient(120deg, var(--blue-600), var(--blue-400)); cursor: pointer; }
-        @media (max-width: 620px) { .filter-row { grid-template-columns: 1fr 1fr; } .filter-row button { grid-column: span 2; } }
-
-        /* ---------- table ---------- */
-        .table-wrap { overflow-x: auto; }
-        table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-        thead th { text-align: left; font-weight: 500; color: var(--ink-500); font-size: 11.5px; text-transform: none; padding: 0 10px 10px; border-bottom: 1px solid var(--glass-border); }
-        tbody td { padding: 11px 10px; border-bottom: 1px solid var(--glass-border); }
-        tbody tr:last-child td { border-bottom: none; }
-        .muted { color: var(--ink-500); }
-        .small { font-size: 12.5px; }
-
-        /* ---------- face check-in widgets ---------- */
-        .progress-ring-wrap { position: relative; width: 76px; height: 76px; margin: 6px auto 4px; }
-        .progress-ring-bg { stroke: rgba(255,255,255,0.10); }
-        html[data-theme="light"] .progress-ring-bg { stroke: rgba(20,40,70,0.10); }
-        .progress-ring-fg { stroke: url(#studentRingGradient); stroke-linecap: round; transition: stroke-dashoffset 0.15s linear; }
-        .progress-ring-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 0.85rem; font-family: 'Space Grotesk', sans-serif; }
-
-        .face-video-wrap { position: relative; display: inline-block; margin: 6px 0; }
-        #checkinVideo { transform: scaleX(-1); border-radius: 14px; border: 1px solid var(--glass-border); display: block; background: #000; }
-        .face-oval-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
-        .face-oval-overlay ellipse {
-            fill: none; stroke: rgba(255,255,255,0.55); stroke-width: 3; stroke-dasharray: 8 6;
-            transition: stroke 0.2s ease, stroke-dasharray 0.2s ease, stroke-width 0.2s ease;
-        }
-        .face-oval-overlay ellipse.oval-good { stroke: var(--success); stroke-dasharray: none; stroke-width: 4; }
-        .face-oval-overlay ellipse.oval-bad { stroke: var(--amber-400); }
-
-        @keyframes scanPulse {
-            0%   { box-shadow: 0 0 0 0 rgba(79,143,214,0.55); }
-            70%  { box-shadow: 0 0 0 14px rgba(79,143,214,0); }
-            100% { box-shadow: 0 0 0 0 rgba(79,143,214,0); }
-        }
-        .scanning-active { animation: scanPulse 1.4s infinite; border-radius: 14px; }
-
-        .result-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.35); pointer-events: none; border-radius: 14px; }
-        .result-circle { fill: none; stroke-width: 3; stroke-dasharray: 145; stroke-dashoffset: 145; }
-        .result-circle.success { stroke: var(--success); }
-        .result-circle.failure { stroke: var(--danger); }
-        .result-check, .result-cross { fill: none; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 50; stroke-dashoffset: 50; }
-        .result-check { stroke: var(--success); }
-        .result-cross { stroke: var(--danger); }
-        @keyframes iconPop { 0% { transform: scale(0.4); opacity: 0; } 60% { transform: scale(1.1); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
-        @keyframes drawPath { to { stroke-dashoffset: 0; } }
-        @keyframes shakeX { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-6px); } 40% { transform: translateX(6px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(4px); } }
-        .result-icon-anim { animation: iconPop 0.3s ease-out forwards; }
-        .result-icon-anim .result-circle { animation: drawPath 0.4s ease-out forwards; }
-        .result-icon-anim .result-check, .result-icon-anim .result-cross { animation: drawPath 0.25s 0.3s ease-out forwards; }
-        .result-icon-anim.shake-fail { animation: iconPop 0.3s ease-out forwards, shakeX 0.4s 0.35s ease-in-out; }
-
-        /* ---------- toast ---------- */
-        #toastStack { position: fixed; top: 18px; right: 18px; z-index: 100; display: flex; flex-direction: column; gap: 10px; max-width: 320px; }
-        .toast-item {
-            display: flex; align-items: flex-start; gap: 10px;
-            padding: 12px 14px; border-radius: 12px; font-size: 13.5px;
-            background: var(--glass-fill); border: 1px solid var(--glass-border);
-            backdrop-filter: blur(18px) saturate(140%); -webkit-backdrop-filter: blur(18px) saturate(140%);
-            box-shadow: 0 14px 34px rgba(4,10,20,0.35);
-            animation: toastIn 0.2s ease-out;
-        }
-        .toast-item.danger  { border-left: 3px solid var(--danger); }
-        .toast-item.success { border-left: 3px solid var(--success); }
-        .toast-item.info    { border-left: 3px solid var(--blue-400); }
-        @keyframes toastIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
-        .toast-close { margin-left: auto; background: none; border: none; color: var(--ink-500); cursor: pointer; font-size: 15px; line-height: 1; }
-
-        @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
-    </style>
 </head>
 <body>
 
-<div class="field-bg" aria-hidden="true"></div>
-<div id="toastStack"></div>
-
-<nav class="topbar">
-    <div class="brand-row">
-        <div class="badge-ring"><span>MAU</span></div>
-        <div class="brand-text">
-            <div class="eyebrow">Smart Attendance</div>
-            <div class="name">Student Dashboard</div>
-        </div>
-    </div>
-    <div class="topbar-right">
-        <button type="button" class="theme-switch" id="themeSwitch" data-theme="dark" aria-label="Toggle day mode" aria-pressed="false">
-            <svg class="icon-moon" viewBox="0 0 24 24" fill="currentColor"><path d="M21.5 14.5A9.5 9.5 0 1 1 9.5 2.5a7.5 7.5 0 0 0 12 12Z"/></svg>
-            <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/></svg>
-        </button>
-        <span class="welcome-text">Welcome, <strong><?= htmlspecialchars($_SESSION["full_name"]) ?></strong></span>
-        <a href="logout.php" class="btn-ghost">Logout</a>
-    </div>
-</nav>
-
-<div class="page">
-
-    <?php if (!$has_face_profile): ?>
-        <div class="enroll-nudge">
-            <span>You haven't enrolled your face yet. You must enroll before you can check in.</span>
-            <a href="face_enroll.php" class="pill-btn">Enroll Now</a>
-        </div>
-    <?php endif; ?>
-
-    <div class="card">
-        <div class="card-head">
-            <h2>Check in to a session</h2>
-            <?php if ($has_face_profile): ?>
-                <span class="chip chip-success">✅ Face Enrolled</span>
-            <?php else: ?>
-                <span class="chip chip-warning">⚠️ Not Enrolled</span>
-            <?php endif; ?>
-        </div>
-        <p class="lede">Make sure you're connected to your lecturer's WiFi hotspot before checking in.</p>
-
-        <form method="POST" action="student_dashboard.php" id="checkinForm">
-            <div class="checkin-row">
-                <input type="text" name="join_code" id="join_code"
-                       placeholder="Enter 6-digit code" maxlength="6" required <?= !$has_face_profile ? "disabled" : "" ?>>
-                <button type="submit" id="checkinBtn" class="btn-success" <?= !$has_face_profile ? "disabled" : "" ?>>Check In</button>
-            </div>
-            <input type="hidden" name="face_verified" id="face_verified" value="0">
-        </form>
-
-        <div id="sessionCard" class="alert alert-primary" style="display:none;">
-            <span id="sessionCardText"></span>
-            <span id="sessionCountdown" class="fw-bold"></span>
-        </div>
-
-        <div id="faceCheckSection" style="display:none;">
-            <div id="facePrompt" class="alert alert-info">
-                Now position your face in the frame, then tap "Start Verification" below.
-            </div>
-            <button type="button" id="startVerifyBtn" class="btn-primary" style="margin-bottom: 10px;">Start Verification</button>
-
-            <div id="modelLoadRing" style="display:none;">
-                <div class="progress-ring-wrap">
-                    <svg width="76" height="76" viewBox="0 0 76 76">
-                        <defs>
-                            <linearGradient id="studentRingGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                                <stop offset="0%" stop-color="var(--blue-400)"/>
-                                <stop offset="100%" stop-color="var(--amber-400)"/>
-                            </linearGradient>
-                        </defs>
-                        <circle class="progress-ring-bg" cx="38" cy="38" r="34" stroke-width="6" fill="none"/>
-                        <circle id="progressRingCircle" class="progress-ring-fg" cx="38" cy="38" r="34" stroke-width="6" fill="none"
-                                stroke-dasharray="213.6" stroke-dashoffset="213.6" transform="rotate(-90 38 38)"/>
-                    </svg>
-                    <div class="progress-ring-label"><span id="progressRingPct">0%</span></div>
-                </div>
-            </div>
-
-            <div class="face-video-wrap" style="display:none;" id="checkinVideoWrap">
-                <video id="checkinVideo" width="320" height="240" autoplay muted playsinline webkit-playsinline></video>
-                <svg class="face-oval-overlay" viewBox="0 0 320 240" preserveAspectRatio="none">
-                    <ellipse id="checkinOval" cx="160" cy="120" rx="85" ry="105"></ellipse>
-                </svg>
-                <div id="resultOverlay" class="result-overlay" style="display:none;">
-                    <svg id="resultSuccessGroup" class="result-icon-anim" viewBox="0 0 52 52" width="72" height="72" style="display:none;">
-                        <circle class="result-circle success" cx="26" cy="26" r="23"/>
-                        <path class="result-check" d="M14 27l7 7 16-16"/>
-                    </svg>
-                    <svg id="resultFailureGroup" class="result-icon-anim" viewBox="0 0 52 52" width="72" height="72" style="display:none;">
-                        <circle class="result-circle failure" cx="26" cy="26" r="23"/>
-                        <path class="result-cross" d="M16 16 L36 36"/>
-                        <path class="result-cross" d="M36 16 L16 36"/>
-                    </svg>
-                </div>
-            </div>
-            <div id="faceStatus" class="alert alert-info" style="display:none;">Loading...</div>
-        </div>
-    </div>
-
-    <div class="card">
-        <div class="card-head">
-            <h2>Your recent attendance</h2>
-            <?php if ($has_filters): ?>
-                <a href="student_dashboard.php" class="btn-ghost">Clear Filters</a>
-            <?php endif; ?>
-        </div>
-
-        <?php if (!empty($student_courses)): ?>
-            <form method="GET" action="student_dashboard.php" class="filter-row" style="margin-top:16px;">
-                <select name="filter_course">
-                    <option value="0">All Courses</option>
-                    <?php foreach ($student_courses as $sc): ?>
-                        <option value="<?= (int)$sc['course_id'] ?>" <?= $filter_course_id === (int)$sc['course_id'] ? "selected" : "" ?>>
-                            <?= htmlspecialchars($sc['course_code']) ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-                <input type="date" name="filter_from" value="<?= htmlspecialchars($filter_date_from) ?>" title="From date">
-                <input type="date" name="filter_to" value="<?= htmlspecialchars($filter_date_to) ?>" title="To date">
-                <button type="submit">Filter</button>
-            </form>
-        <?php endif; ?>
-
-        <?php if (empty($history)): ?>
-            <p class="muted"><?= $has_filters ? "No attendance records match your filters." : "No attendance records yet." ?></p>
-        <?php else: ?>
-            <div class="table-wrap">
-                <table>
-                    <thead><tr><th>Course</th><th>Marked At</th><th>Status</th></tr></thead>
-                    <tbody>
-                        <?php foreach ($history as $h): ?>
-                            <tr>
-                                <td><?= htmlspecialchars($h['course_code']) ?></td>
-                                <td><?= date("M j, g:i A", strtotime($h['marked_at'])) ?></td>
-                                <td>
-                                    <?php if ($h['status'] === 'present'): ?>
-                                        <span class="chip chip-success">Present</span>
-                                    <?php else: ?>
-                                        <span class="chip chip-warning">Flagged</span>
-                                    <?php endif; ?>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-            <?php if (!$has_filters && count($history) >= 10): ?>
-                <p class="muted small" style="margin-top:10px;">Showing your 10 most recent records. Use the filters above to see more.</p>
-            <?php endif; ?>
-        <?php endif; ?>
-    </div>
-
+<div class="field-bg" aria-hidden="true">
+    <div class="glow a"></div>
+    <div class="glow b"></div>
+    <div class="grid"></div>
 </div>
 
+<div id="toastStack"></div>
+
+<?php if ($show_success): ?>
+
+    <!-- ===================== SUCCESS SCREEN ===================== -->
+    <div class="mobile-shell" style="padding-bottom: 30px;">
+        <div class="mobile-topbar">
+            <div class="brand-lockup">
+                <div class="logo-mark size-sm">
+                    <svg viewBox="0 0 24 24" fill="none">
+                        <path d="M12 2.5 L21.5 20.5 H2.5 L12 2.5Z" fill="white"/>
+                        <path d="M8.7 14.3 L11 16.8 L15.3 10.1" stroke="var(--blue-600)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                    </svg>
+                </div>
+                <div class="wordmark size-sm">AttendX</div>
+            </div>
+            <button type="button" class="theme-switch" id="themeSwitch" data-theme="light" aria-label="Toggle day mode" aria-pressed="false">
+                <svg class="icon-moon" viewBox="0 0 24 24" fill="currentColor"><path d="M21.5 14.5A9.5 9.5 0 1 1 9.5 2.5a7.5 7.5 0 0 0 12 12Z"/></svg>
+                <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/></svg>
+            </button>
+        </div>
+
+        <div class="success-screen">
+            <div class="success-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg>
+            </div>
+            <h2>Attendance Recorded!</h2>
+            <p class="lede">You've successfully marked your attendance for <?= htmlspecialchars($last_checkin['course_code']) ?>.</p>
+
+            <div class="success-card">
+                <div class="profile-row">
+                    <span class="p-label">Course</span>
+                    <span class="p-value"><?= htmlspecialchars($last_checkin['course_code']) ?> — <?= htmlspecialchars($last_checkin['course_title']) ?></span>
+                </div>
+                <div class="profile-row">
+                    <span class="p-label">Time</span>
+                    <span class="p-value"><?= date("g:i A", strtotime($last_checkin['time'])) ?></span>
+                </div>
+                <div class="profile-row">
+                    <span class="p-label">Date</span>
+                    <span class="p-value"><?= date("M j, Y", strtotime($last_checkin['time'])) ?></span>
+                </div>
+                <div class="profile-row">
+                    <span class="p-label">Status</span>
+                    <span class="chip chip-success">Present</span>
+                </div>
+            </div>
+
+            <a href="student_dashboard.php" class="btn btn-primary w-full" style="max-width:340px;">Back to Dashboard</a>
+        </div>
+    </div>
+
+<?php else: ?>
+
+    <!-- ===================== MAIN DASHBOARD ===================== -->
+    <div class="mobile-shell">
+        <div class="mobile-topbar">
+            <div>
+                <div class="hello"><?= $greeting ?>, <?= htmlspecialchars($first_name) ?> 👋</div>
+                <p class="sub">Keep showing up. It matters.</p>
+            </div>
+            <button type="button" class="theme-switch" id="themeSwitch" data-theme="light" aria-label="Toggle day mode" aria-pressed="false">
+                <svg class="icon-moon" viewBox="0 0 24 24" fill="currentColor"><path d="M21.5 14.5A9.5 9.5 0 1 1 9.5 2.5a7.5 7.5 0 0 0 12 12Z"/></svg>
+                <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/></svg>
+            </button>
+        </div>
+
+        <div class="mobile-content">
+
+            <!-- ---------- HOME TAB ---------- -->
+            <div class="tab-panel active" id="tab-home">
+
+                <?php if (!$has_face_profile): ?>
+                    <div class="alert alert-danger" style="align-items:flex-start;">
+                        <span style="margin-right:auto;">You haven't enrolled your face yet. Enroll before you can check in.</span>
+                        <a href="face_enroll.php" class="btn btn-sm btn-primary" style="flex-shrink:0;">Enroll</a>
+                    </div>
+                <?php endif; ?>
+
+                <div class="next-class-card <?= $has_face_profile ? '' : 'idle' ?>">
+                    <?php if ($has_face_profile): ?>
+                        <div class="label">Ready when you are</div>
+                        <div class="course">Mark your attendance</div>
+                        <div class="time">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+                            Enter the join code your lecturer shares in class
+                        </div>
+                    <?php else: ?>
+                        <div class="label">Face enrollment required</div>
+                        <div class="course">Enroll your face to get started</div>
+                        <div class="time">Head to Profile → Enroll Face</div>
+                    <?php endif; ?>
+                </div>
+
+                <div class="quick-grid">
+                    <button type="button" class="quick-card" id="qaMarkAttendance" <?= !$has_face_profile ? "disabled" : "" ?>>
+                        <div class="q-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><circle cx="12" cy="13.5" r="3.2"/></svg></div>
+                        <div class="q-label">Mark Attendance</div>
+                        <div class="q-sub">Join your active session</div>
+                    </button>
+                    <button type="button" class="quick-card" data-tab="courses">
+                        <div class="q-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg></div>
+                        <div class="q-label">My Courses</div>
+                        <div class="q-sub">View enrolled courses</div>
+                    </button>
+                    <button type="button" class="quick-card" data-tab="attendance">
+                        <div class="q-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/><path d="m8.5 14 2 2 4-4"/></svg></div>
+                        <div class="q-label">My Attendance</div>
+                        <div class="q-sub">View your records</div>
+                    </button>
+                    <button type="button" class="quick-card" data-tab="profile">
+                        <div class="q-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a7.4 7.4 0 0 0 0-3l2-1.6-2-3.4-2.4.8a7.6 7.6 0 0 0-2.6-1.5L14 2h-4l-.4 2.4a7.6 7.6 0 0 0-2.6 1.5l-2.4-.8-2 3.4 2 1.6a7.4 7.4 0 0 0 0 3l-2 1.6 2 3.4 2.4-.8a7.6 7.6 0 0 0 2.6 1.5L10 22h4l.4-2.4a7.6 7.6 0 0 0 2.6-1.5l2.4.8 2-3.4-2-1.6Z"/></svg></div>
+                        <div class="q-label">Settings</div>
+                        <div class="q-sub">Manage your profile</div>
+                    </button>
+                </div>
+
+                <div class="section-head">
+                    <h3>Recent Attendance</h3>
+                    <button type="button" class="btn-link" data-tab="attendance">View All</button>
+                </div>
+                <?php if (empty($recent_history)): ?>
+                    <p class="muted small" style="padding-bottom:16px;">No attendance recorded yet.</p>
+                <?php else: ?>
+                    <div class="list-card">
+                        <?php foreach ($recent_history as $h): ?>
+                            <div class="list-row">
+                                <div class="meta">
+                                    <div class="title"><?= htmlspecialchars($h['course_code']) ?></div>
+                                    <div class="sub"><?= date("M j, g:i A", strtotime($h['marked_at'])) ?></div>
+                                </div>
+                                <span class="chip <?= $h['status'] === 'present' ? 'chip-success' : 'chip-warning' ?>"><?= $h['status'] === 'present' ? 'Present' : 'Flagged' ?></span>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <!-- ---------- COURSES TAB ---------- -->
+            <div class="tab-panel" id="tab-courses">
+                <div class="section-head"><h3>My Courses</h3></div>
+                <?php if (empty($my_courses)): ?>
+                    <p class="muted small">You haven't checked into any courses yet.</p>
+                <?php else: ?>
+                    <div class="list-card">
+                        <?php foreach ($my_courses as $mc): ?>
+                            <div class="course-card">
+                                <div class="c-icon"><?= htmlspecialchars(substr($mc['course_code'], 0, 2)) ?></div>
+                                <div style="flex:1; min-width:0;">
+                                    <div class="c-title"><?= htmlspecialchars($mc['course_code']) ?> — <?= htmlspecialchars($mc['course_title']) ?></div>
+                                    <div class="c-sub"><?= (int)$mc['checkins'] ?> check-in<?= (int)$mc['checkins'] === 1 ? '' : 's' ?> · last <?= date("M j", strtotime($mc['last_seen'])) ?></div>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <!-- ---------- ATTENDANCE TAB ---------- -->
+            <div class="tab-panel" id="tab-attendance">
+                <div class="section-head">
+                    <h3>Attendance History</h3>
+                    <button type="button" class="btn btn-sm btn-primary" id="qaMarkAttendance2" <?= !$has_face_profile ? "disabled" : "" ?>>+ Mark Attendance</button>
+                </div>
+
+                <?php if (!empty($my_courses)): ?>
+                    <form method="GET" action="student_dashboard.php#tab-attendance" class="form-grid cols-session" style="margin-bottom:16px;">
+                        <div>
+                            <select name="filter_course">
+                                <option value="0">All Courses</option>
+                                <?php foreach ($my_courses as $mc): ?>
+                                    <option value="<?= (int)$mc['course_id'] ?>" <?= $filter_course_id === (int)$mc['course_id'] ? "selected" : "" ?>>
+                                        <?= htmlspecialchars($mc['course_code']) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div></div>
+                        <div>
+                            <input type="date" name="filter_from" value="<?= htmlspecialchars($filter_date_from) ?>" title="From date">
+                        </div>
+                        <div>
+                            <input type="date" name="filter_to" value="<?= htmlspecialchars($filter_date_to) ?>" title="To date">
+                        </div>
+                        <div class="span-2">
+                            <button type="submit" class="btn btn-outline btn-sm w-full">Filter</button>
+                        </div>
+                    </form>
+                    <?php if ($has_filters): ?>
+                        <a href="student_dashboard.php#tab-attendance" class="btn-link small" style="display:inline-block; margin-bottom:12px;">Clear filters</a>
+                    <?php endif; ?>
+                <?php endif; ?>
+
+                <?php if (empty($history)): ?>
+                    <p class="muted small"><?= $has_filters ? "No attendance records match your filters." : "No attendance records yet." ?></p>
+                <?php else: ?>
+                    <div class="list-card">
+                        <?php foreach ($history as $h): ?>
+                            <div class="list-row">
+                                <div class="meta">
+                                    <div class="title"><?= htmlspecialchars($h['course_code']) ?></div>
+                                    <div class="sub"><?= date("M j, g:i A", strtotime($h['marked_at'])) ?></div>
+                                </div>
+                                <span class="chip <?= $h['status'] === 'present' ? 'chip-success' : 'chip-warning' ?>"><?= $h['status'] === 'present' ? 'Present' : 'Flagged' ?></span>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <!-- ---------- PROFILE TAB ---------- -->
+            <div class="tab-panel" id="tab-profile">
+                <div class="section-head"><h3>Profile</h3></div>
+
+                <div class="profile-card">
+                    <div class="profile-row">
+                        <span class="p-label">Full Name</span>
+                        <span class="p-value"><?= htmlspecialchars($_SESSION["full_name"]) ?></span>
+                    </div>
+                    <div class="profile-row">
+                        <span class="p-label">Matric Number</span>
+                        <span class="p-value"><?= htmlspecialchars($profile['matric_number'] ?? '—') ?></span>
+                    </div>
+                    <div class="profile-row">
+                        <span class="p-label">Email</span>
+                        <span class="p-value"><?= htmlspecialchars($profile['email'] ?? '—') ?></span>
+                    </div>
+                    <div class="profile-row">
+                        <span class="p-label">Face Enrollment</span>
+                        <span class="chip <?= $has_face_profile ? 'chip-success' : 'chip-warning' ?>"><?= $has_face_profile ? 'Enrolled' : 'Not Enrolled' ?></span>
+                    </div>
+                </div>
+
+                <div class="profile-card">
+                    <a href="face_enroll.php" class="profile-row clickable" style="text-decoration:none; color:inherit;">
+                        <span class="p-value" style="font-weight:600;"><?= $has_face_profile ? 'Re-enroll Face' : 'Enroll Face' ?></span>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
+                    </a>
+                    <div class="profile-row clickable" id="resetPasswordRow">
+                        <span class="p-value" style="font-weight:600;">Change Password</span>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
+                    </div>
+                </div>
+
+                <div id="resetPasswordNotice" class="alert alert-info" style="display:none;">
+                    <span style="margin-right:auto;">Passwords can't be changed here — ask your system administrator to reset it for you.</span>
+                </div>
+
+                <a href="logout.php" class="btn btn-outline w-full">Logout</a>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- bottom tab bar -->
+    <nav class="bottom-tabs">
+        <button type="button" class="tab-btn active" data-tab="home">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10"/></svg>
+            Home
+        </button>
+        <button type="button" class="tab-btn" data-tab="courses">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>
+            Courses
+        </button>
+        <button type="button" class="tab-btn" data-tab="attendance">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/></svg>
+            Attendance
+        </button>
+        <button type="button" class="tab-btn" data-tab="profile">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>
+            Profile
+        </button>
+    </nav>
+
+    <!-- ===================== MARK ATTENDANCE WIZARD ===================== -->
+    <div class="wizard-overlay" id="wizardOverlay">
+        <div class="wizard-head">
+            <button type="button" class="wizard-back" id="wizardBackBtn" aria-label="Close">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+            </button>
+            <h2>Mark Attendance</h2>
+        </div>
+
+        <div class="wizard-steps">
+            <div class="wizard-step active" data-step="1"><div class="dot">1</div><div class="label">Details</div></div>
+            <div class="wizard-connector"></div>
+            <div class="wizard-step" data-step="2"><div class="dot">2</div><div class="label">Face</div></div>
+            <div class="wizard-connector"></div>
+            <div class="wizard-step" data-step="3"><div class="dot">3</div><div class="label">Confirm</div></div>
+        </div>
+
+        <form method="POST" action="student_dashboard.php" id="checkinForm" class="wizard-body">
+            <!-- Step 1: Details -->
+            <div class="wizard-step-panel active" data-step-panel="1">
+                <div class="field-group">
+                    <label for="join_code">Join Code</label>
+                    <input type="text" name="join_code" id="join_code" placeholder="Enter 6-digit code" maxlength="6" autocomplete="off">
+                    <span class="caption" style="display:block; margin-top:8px;">Make sure you're connected to your lecturer's WiFi hotspot before continuing.</span>
+                </div>
+                <button type="button" id="wizardContinueBtn" class="btn btn-primary w-full">Continue</button>
+            </div>
+
+            <!-- Step 2: Face -->
+            <div class="wizard-step-panel" data-step-panel="2">
+                <div id="sessionSummary" class="alert alert-info" style="display:none;">
+                    <span id="sessionSummaryText" style="margin-right:auto;"></span>
+                    <span id="sessionCountdown" class="fw-bold"></span>
+                </div>
+
+                <p class="caption" style="text-align:center; margin-bottom:10px;">Look at the camera and hold still.</p>
+
+                <div style="text-align:center;">
+                    <div id="modelLoadRing" style="display:none;">
+                        <div class="progress-ring-wrap">
+                            <svg width="76" height="76" viewBox="0 0 76 76">
+                                <circle class="progress-ring-bg" cx="38" cy="38" r="34" stroke-width="6" fill="none"/>
+                                <circle id="progressRingCircle" class="progress-ring-fg" cx="38" cy="38" r="34" stroke-width="6" fill="none"
+                                        stroke-dasharray="213.6" stroke-dashoffset="213.6" transform="rotate(-90 38 38)"/>
+                            </svg>
+                            <div class="progress-ring-label"><span id="progressRingPct">0%</span></div>
+                        </div>
+                    </div>
+
+                    <div class="face-video-wrap" style="display:none;" id="checkinVideoWrap">
+                        <video id="checkinVideo" width="320" height="240" autoplay muted playsinline webkit-playsinline></video>
+                        <svg class="face-oval-overlay" viewBox="0 0 320 240" preserveAspectRatio="none">
+                            <ellipse id="checkinOval" cx="160" cy="120" rx="85" ry="105"></ellipse>
+                        </svg>
+                        <div id="resultOverlay" class="result-overlay" style="display:none;">
+                            <svg id="resultSuccessGroup" class="result-icon-anim" viewBox="0 0 52 52" width="72" height="72" style="display:none;">
+                                <circle class="result-circle success" cx="26" cy="26" r="23"/>
+                                <path class="result-check" d="M14 27l7 7 16-16"/>
+                            </svg>
+                            <svg id="resultFailureGroup" class="result-icon-anim" viewBox="0 0 52 52" width="72" height="72" style="display:none;">
+                                <circle class="result-circle failure" cx="26" cy="26" r="23"/>
+                                <path class="result-cross" d="M16 16 L36 36"/>
+                                <path class="result-cross" d="M36 16 L16 36"/>
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="faceStatus" class="alert alert-info" style="display:none;"><span style="margin-right:auto;">Loading...</span></div>
+                <button type="button" id="startVerifyBtn" class="btn btn-primary w-full">Verify Face</button>
+            </div>
+
+            <!-- Step 3: Confirm -->
+            <div class="wizard-step-panel" data-step-panel="3">
+                <div class="success-card" style="margin: 10px auto 24px;">
+                    <div class="profile-row">
+                        <span class="p-label">Course</span>
+                        <span class="p-value" id="confirmCourse">—</span>
+                    </div>
+                    <div class="profile-row">
+                        <span class="p-label">Matric Number</span>
+                        <span class="p-value"><?= htmlspecialchars($profile['matric_number'] ?? '—') ?></span>
+                    </div>
+                    <div class="profile-row">
+                        <span class="p-label">Face</span>
+                        <span class="chip chip-success">Verified</span>
+                    </div>
+                </div>
+                <button type="button" id="confirmAttendanceBtn" class="btn btn-success w-full">Confirm Attendance</button>
+            </div>
+
+            <input type="hidden" name="face_verified" id="face_verified" value="0">
+        </form>
+    </div>
+
+<?php endif; ?>
+
 <script>
+<?php if (!$show_success): ?>
 /* ---------------------------------------------------------
-   Toast notifications (self-contained glass toasts — no
-   Bootstrap dependency)
+   Bottom tab navigation
 --------------------------------------------------------- */
-function showToast(message, type) {
-    if (!message) return;
-    type = type || "info";
-    const stack = document.getElementById("toastStack");
-    const item = document.createElement("div");
-    item.className = "toast-item " + type;
-    item.innerHTML = '<span></span><button type="button" class="toast-close" aria-label="Dismiss">&times;</button>';
-    item.querySelector("span").textContent = message;
-    item.querySelector(".toast-close").addEventListener("click", () => item.remove());
-    stack.appendChild(item);
-    setTimeout(() => item.remove(), 5000);
+function activateTab(tabName) {
+    document.querySelectorAll(".tab-panel").forEach(p => p.classList.toggle("active", p.id === "tab-" + tabName));
+    document.querySelectorAll(".bottom-tabs .tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === tabName));
 }
-window.showToast = showToast;
+document.querySelectorAll(".bottom-tabs .tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => activateTab(btn.dataset.tab));
+});
+document.querySelectorAll("[data-tab]:not(.tab-btn)").forEach(el => {
+    el.addEventListener("click", () => activateTab(el.dataset.tab));
+});
 
 /* ---------------------------------------------------------
-   Day/night mode toggle, persisted with the same key used
-   across the app
+   Change Password row — no self-service reset; point to admin
 --------------------------------------------------------- */
-(function () {
-    const THEME_KEY = "attendance_theme";
-    const root = document.documentElement;
-    const toggle = document.getElementById("themeSwitch");
-    function apply(theme) {
-        root.setAttribute("data-theme", theme);
-        root.style.colorScheme = theme;
-        toggle.dataset.theme = theme;
-        toggle.setAttribute("aria-pressed", theme === "light");
-        toggle.setAttribute("aria-label", theme === "light" ? "Switch to dark mode" : "Switch to day mode");
-    }
-    const saved = localStorage.getItem(THEME_KEY) || "dark";
-    apply(saved);
-    toggle.addEventListener("click", function () {
-        const next = root.getAttribute("data-theme") === "light" ? "dark" : "light";
-        localStorage.setItem(THEME_KEY, next);
-        apply(next);
+const resetRow = document.getElementById("resetPasswordRow");
+const resetNotice = document.getElementById("resetPasswordNotice");
+if (resetRow) {
+    resetRow.addEventListener("click", function () {
+        resetNotice.style.display = resetNotice.style.display === "none" ? "flex" : "none";
     });
-})();
+}
 
+/* ---------------------------------------------------------
+   Mark Attendance wizard
+--------------------------------------------------------- */
+const wizardOverlay = document.getElementById("wizardOverlay");
+const wizardBackBtn = document.getElementById("wizardBackBtn");
+const checkinForm = document.getElementById("checkinForm");
+let currentWizardStep = 1;
+let faceAlreadyVerified = false;
+let activeSessionInfo = null;
+
+function openWizard() {
+    wizardOverlay.classList.add("open");
+    setWizardStep(1);
+}
+function closeWizard() {
+    wizardOverlay.classList.remove("open");
+}
+
+const markBtn1 = document.getElementById("qaMarkAttendance");
+const markBtn2 = document.getElementById("qaMarkAttendance2");
+[markBtn1, markBtn2].forEach(btn => {
+    if (btn) btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        openWizard();
+    });
+});
+wizardBackBtn.addEventListener("click", closeWizard);
+
+function setWizardStep(n) {
+    currentWizardStep = n;
+    document.querySelectorAll(".wizard-step").forEach(s => {
+        const step = parseInt(s.dataset.step, 10);
+        s.classList.toggle("active", step === n);
+        s.classList.toggle("done", step < n);
+    });
+    document.querySelectorAll(".wizard-step-panel").forEach(p => {
+        p.classList.toggle("active", parseInt(p.dataset.stepPanel, 10) === n);
+    });
+}
+
+/* ---------------------------------------------------------
+   Step 1 → Step 2: look up the join code
+--------------------------------------------------------- */
+let countdownInterval = null;
+function stopCountdown() {
+    if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; }
+}
+function startCountdown(secondsRemaining) {
+    stopCountdown();
+    let remaining = secondsRemaining;
+    const el = document.getElementById("sessionCountdown");
+    function render() {
+        if (remaining <= 0) {
+            el.textContent = "Closed";
+            el.className = "fw-bold text-danger";
+            stopCountdown();
+            showToast("This session has just closed. Please check with your lecturer.", "danger");
+            return;
+        }
+        const mins = Math.floor(remaining / 60);
+        const secs = remaining % 60;
+        el.textContent = "Closes in " + mins + ":" + String(secs).padStart(2, "0");
+        el.className = remaining <= 60 ? "fw-bold text-danger" : "fw-bold";
+        remaining--;
+    }
+    render();
+    countdownInterval = setInterval(render, 1000);
+}
+
+const wizardContinueBtn = document.getElementById("wizardContinueBtn");
+wizardContinueBtn.addEventListener("click", async function () {
+    const joinCodeInput = document.getElementById("join_code");
+    const joinCode = joinCodeInput.value.trim();
+    if (!joinCode) { showToast("Enter the join code your lecturer shared.", "danger"); return; }
+
+    wizardContinueBtn.disabled = true;
+    wizardContinueBtn.textContent = "Checking...";
+
+    try {
+        const response = await fetch("session_lookup.php", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: "join_code=" + encodeURIComponent(joinCode)
+        });
+        const result = await response.json();
+
+        wizardContinueBtn.disabled = false;
+        wizardContinueBtn.textContent = "Continue";
+
+        if (!result.success) {
+            showToast(result.message || "Invalid join code.", "danger");
+            return;
+        }
+
+        activeSessionInfo = result;
+        document.getElementById("sessionSummary").style.display = "flex";
+        document.getElementById("sessionSummaryText").textContent = result.course_code + " — " + result.course_title;
+        document.getElementById("confirmCourse").textContent = result.course_code + " — " + result.course_title;
+        startCountdown(result.seconds_remaining);
+
+        setWizardStep(2);
+    } catch (err) {
+        wizardContinueBtn.disabled = false;
+        wizardContinueBtn.textContent = "Continue";
+        showToast("Could not reach the server. Please try again.", "danger");
+    }
+});
+
+/* ---------------------------------------------------------
+   Step 2: face verification (model loading, live guidance, capture)
+--------------------------------------------------------- */
 const MODEL_URL = "assets/facelib/models";
 let modelsLoaded = false;
 let modelsLoadingPromise = null;
-let faceAlreadyVerified = false;
 
-/* ---------------------------------------------------------
-   Progress ring (shown only if models aren't already cached/loaded
-   by the time the student taps "Start Verification")
---------------------------------------------------------- */
-const RING_CIRCUMFERENCE = 2 * Math.PI * 34; // matches r="34" on the ring circle
-
+const RING_CIRCUMFERENCE = 2 * Math.PI * 34;
 function setRingProgress(pct) {
     const circle = document.getElementById("progressRingCircle");
     const label = document.getElementById("progressRingPct");
     if (!circle || !label) return;
     const clamped = Math.min(100, Math.max(0, pct));
-    const offset = RING_CIRCUMFERENCE - (clamped / 100) * RING_CIRCUMFERENCE;
-    circle.style.strokeDashoffset = offset;
+    circle.style.strokeDashoffset = RING_CIRCUMFERENCE - (clamped / 100) * RING_CIRCUMFERENCE;
     label.textContent = Math.round(clamped) + "%";
 }
-
 async function loadStepWithRing(promiseFn, fromPct, toPct) {
     let current = fromPct;
     const ceiling = fromPct + (toPct - fromPct) * 0.9;
-    const tick = setInterval(() => {
-        current += (ceiling - current) * 0.08;
-        setRingProgress(current);
-    }, 120);
-    try {
-        await promiseFn();
-    } finally {
-        clearInterval(tick);
-    }
+    const tick = setInterval(() => { current += (ceiling - current) * 0.08; setRingProgress(current); }, 120);
+    try { await promiseFn(); } finally { clearInterval(tick); }
     setRingProgress(toPct);
 }
-
-// Preload models silently as soon as the dashboard opens — only if student has a face profile.
 function preloadModels() {
     modelsLoadingPromise = (async () => {
         await loadStepWithRing(() => faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL), 0, 8);
@@ -683,7 +757,6 @@ function preloadModels() {
         modelsLoaded = true;
     })();
 }
-
 <?php if ($has_face_profile): ?>
 window.addEventListener('load', preloadModels);
 <?php endif; ?>
@@ -692,24 +765,16 @@ function showResultOverlay(type) {
     const overlay = document.getElementById("resultOverlay");
     const successGroup = document.getElementById("resultSuccessGroup");
     const failureGroup = document.getElementById("resultFailureGroup");
-
     overlay.style.display = "flex";
-
     const activeGroup = type === "success" ? successGroup : failureGroup;
     const inactiveGroup = type === "success" ? failureGroup : successGroup;
-
     inactiveGroup.style.display = "none";
     activeGroup.style.display = "block";
-
     activeGroup.classList.remove("result-icon-anim", "shake-fail");
     void activeGroup.offsetWidth;
     activeGroup.classList.add("result-icon-anim");
     if (type === "failure") activeGroup.classList.add("shake-fail");
-
-    return new Promise(resolve => setTimeout(() => {
-        overlay.style.display = "none";
-        resolve();
-    }, 900));
+    return new Promise(resolve => setTimeout(() => { overlay.style.display = "none"; resolve(); }, 900));
 }
 
 function evaluateFacePosition(detection, video) {
@@ -719,7 +784,6 @@ function evaluateFacePosition(detection, video) {
     const centerY = box.y + box.height / 2;
     const offsetXRatio = Math.abs(centerX - video.videoWidth / 2) / video.videoWidth;
     const offsetYRatio = Math.abs(centerY - video.videoHeight / 2) / video.videoHeight;
-
     if (faceWidthRatio < 0.22) return { ok: false, message: "Move closer to the camera." };
     if (faceWidthRatio > 0.65) return { ok: false, message: "Move back a little." };
     if (offsetXRatio > 0.18) return { ok: false, message: "Center your face horizontally." };
@@ -728,18 +792,12 @@ function evaluateFacePosition(detection, video) {
 }
 
 async function runFaceVerification() {
-    const section = document.getElementById("faceCheckSection");
     const statusEl = document.getElementById("faceStatus");
     const ringWrap = document.getElementById("modelLoadRing");
-    section.style.display = "block";
+    statusEl.style.display = "flex";
     statusEl.className = "alert alert-info";
-
-    if (!modelsLoaded) {
-        ringWrap.style.display = "block";
-        statusEl.textContent = "Loading face models...";
-    } else {
-        statusEl.textContent = "Starting camera...";
-    }
+    statusEl.querySelector("span").textContent = modelsLoaded ? "Starting camera..." : "Loading face models...";
+    if (!modelsLoaded) ringWrap.style.display = "block";
 
     try {
         if (!modelsLoadingPromise) preloadModels();
@@ -747,7 +805,7 @@ async function runFaceVerification() {
     } catch (err) {
         ringWrap.style.display = "none";
         statusEl.className = "alert alert-danger";
-        statusEl.textContent = "Failed to load face models. Please refresh the page and try again.";
+        statusEl.querySelector("span").textContent = "Failed to load face models. Please refresh and try again.";
         return false;
     }
     ringWrap.style.display = "none";
@@ -761,105 +819,81 @@ async function runFaceVerification() {
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
     } catch (err) {
         statusEl.className = "alert alert-danger";
-        statusEl.textContent = "Camera access denied or unavailable.";
+        statusEl.querySelector("span").textContent = "Camera access denied or unavailable.";
         return false;
     }
     video.srcObject = stream;
     video.muted = true;
+    try { await video.play(); } catch (playErr) { console.warn("video.play() failed:", playErr); }
 
-    try {
-        await video.play();
-    } catch (playErr) {
-        console.warn("video.play() failed:", playErr);
-    }
-
-    statusEl.textContent = "Position your face in the frame...";
-
-    await new Promise(resolve => {
-        video.onloadedmetadata = () => resolve();
-    });
+    statusEl.querySelector("span").textContent = "Position your face in the frame...";
+    await new Promise(resolve => { video.onloadedmetadata = () => resolve(); });
 
     let stableGoodCount = 0;
     let detection = null;
     const maxAttempts = 40;
     let attempts = 0;
-
     videoWrap.classList.add("scanning-active");
 
     while (attempts < maxAttempts) {
         attempts++;
         let d = null;
-        try {
-            d = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions());
-        } catch (frameErr) {
-            console.warn("Face detection error on this frame:", frameErr);
-            d = null;
-        }
+        try { d = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()); }
+        catch (frameErr) { console.warn("Face detection error on this frame:", frameErr); d = null; }
 
         if (!d) {
-            statusEl.className = "alert alert-secondary";
-            statusEl.textContent = "No face detected — make sure your face is visible.";
+            statusEl.className = "alert alert-info";
+            statusEl.querySelector("span").textContent = "No face detected — make sure your face is visible.";
             stableGoodCount = 0;
             ovalEl.classList.remove("oval-good", "oval-bad");
         } else {
             const status = evaluateFacePosition(d, video);
-            statusEl.className = status.ok ? "alert alert-success" : "alert alert-secondary";
-            statusEl.textContent = status.message;
+            statusEl.className = status.ok ? "alert alert-success" : "alert alert-info";
+            statusEl.querySelector("span").textContent = status.message;
             if (status.ok) {
-                ovalEl.classList.add("oval-good");
-                ovalEl.classList.remove("oval-bad");
+                ovalEl.classList.add("oval-good"); ovalEl.classList.remove("oval-bad");
                 stableGoodCount++;
-                if (stableGoodCount >= 3) {
-                    detection = d;
-                    break;
-                }
+                if (stableGoodCount >= 3) { detection = d; break; }
             } else {
-                ovalEl.classList.add("oval-bad");
-                ovalEl.classList.remove("oval-good");
+                ovalEl.classList.add("oval-bad"); ovalEl.classList.remove("oval-good");
                 stableGoodCount = 0;
             }
         }
         await new Promise(resolve => setTimeout(resolve, 300));
     }
-
     videoWrap.classList.remove("scanning-active");
 
     if (!detection) {
         stream.getTracks().forEach(track => track.stop());
         statusEl.className = "alert alert-danger";
-        statusEl.textContent = "Could not get a stable face position. Please try again.";
+        statusEl.querySelector("span").textContent = "Could not get a stable face position. Please try again.";
         await showResultOverlay("failure");
         return false;
     }
 
     statusEl.className = "alert alert-info";
-    statusEl.textContent = "Capturing...";
+    statusEl.querySelector("span").textContent = "Capturing...";
 
     let fullDetection = null;
     try {
-        fullDetection = await faceapi
-            .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
-            .withFaceLandmarks()
-            .withFaceDescriptor();
+        fullDetection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();
     } catch (captureErr) {
         console.warn("Final capture detection error:", captureErr);
         stream.getTracks().forEach(track => track.stop());
         statusEl.className = "alert alert-danger";
-        statusEl.textContent = "Something went wrong capturing your face. Please try again.";
+        statusEl.querySelector("span").textContent = "Something went wrong capturing your face. Please try again.";
         return false;
     }
-
     stream.getTracks().forEach(track => track.stop());
 
     if (!fullDetection) {
         statusEl.className = "alert alert-danger";
-        statusEl.textContent = "No face detected. Please try again.";
+        statusEl.querySelector("span").textContent = "No face detected. Please try again.";
         await showResultOverlay("failure");
         return false;
     }
 
     const descriptorArray = Array.from(fullDetection.descriptor);
-
     let result;
     try {
         const response = await fetch("verify_face.php", {
@@ -870,147 +904,54 @@ async function runFaceVerification() {
         result = await response.json();
     } catch (err) {
         statusEl.className = "alert alert-danger";
-        statusEl.textContent = "Error contacting server. Please try again.";
+        statusEl.querySelector("span").textContent = "Error contacting server. Please try again.";
         await showResultOverlay("failure");
         return false;
     }
 
     if (result.match) {
         statusEl.className = "alert alert-success";
-        statusEl.textContent = "Face verified! Submitting attendance...";
+        statusEl.querySelector("span").textContent = "Face verified!";
         await showResultOverlay("success");
         return true;
     } else {
         statusEl.className = "alert alert-danger";
-        statusEl.textContent = result.message || "Face verification failed.";
+        statusEl.querySelector("span").textContent = result.message || "Face verification failed.";
         await showResultOverlay("failure");
         return false;
     }
 }
 
-const checkinForm = document.getElementById("checkinForm");
 const startVerifyBtn = document.getElementById("startVerifyBtn");
-const sessionCard = document.getElementById("sessionCard");
-const sessionCardText = document.getElementById("sessionCardText");
-const sessionCountdown = document.getElementById("sessionCountdown");
+startVerifyBtn.addEventListener("click", async function () {
+    startVerifyBtn.disabled = true;
+    startVerifyBtn.textContent = "Verifying...";
+    document.getElementById("checkinVideo").style.display = "block";
 
-let countdownInterval = null;
+    const verified = await runFaceVerification();
 
-function stopCountdown() {
-    if (countdownInterval) {
-        clearInterval(countdownInterval);
-        countdownInterval = null;
+    if (verified) {
+        faceAlreadyVerified = true;
+        document.getElementById("face_verified").value = "1";
+        setWizardStep(3);
     }
-}
+    startVerifyBtn.disabled = false;
+    startVerifyBtn.textContent = "Verify Face";
+});
 
-function startCountdown(secondsRemaining) {
+/* ---------------------------------------------------------
+   Step 3: confirm + submit
+--------------------------------------------------------- */
+document.getElementById("confirmAttendanceBtn").addEventListener("click", function () {
+    if (!faceAlreadyVerified) { showToast("Please verify your face first.", "danger"); return; }
     stopCountdown();
-    let remaining = secondsRemaining;
+    checkinForm.submit();
+});
 
-    function render() {
-        if (remaining <= 0) {
-            sessionCountdown.textContent = "Closed";
-            sessionCountdown.className = "fw-bold text-danger";
-            stopCountdown();
-            showToast("This session has just closed. Please check with your lecturer.", "danger");
-            document.getElementById("checkinBtn").disabled = false;
-            document.getElementById("join_code").disabled = false;
-            document.getElementById("faceCheckSection").style.display = "none";
-            return;
-        }
-        const mins = Math.floor(remaining / 60);
-        const secs = remaining % 60;
-        sessionCountdown.textContent = "Closes in " + mins + ":" + String(secs).padStart(2, "0");
-        sessionCountdown.className = remaining <= 60 ? "fw-bold text-danger" : "fw-bold";
-        remaining--;
-    }
-
-    render();
-    countdownInterval = setInterval(render, 1000);
-}
-
-if (checkinForm) {
-    checkinForm.addEventListener("submit", async function(e) {
-        if (faceAlreadyVerified) return;
-        e.preventDefault();
-
-        const btn = document.getElementById("checkinBtn");
-        const joinCodeInput = document.getElementById("join_code");
-        const joinCode = joinCodeInput.value.trim();
-
-        if (!joinCode) return;
-
-        btn.disabled = true;
-        btn.textContent = "Checking...";
-
-        try {
-            const response = await fetch("session_lookup.php", {
-                method: "POST",
-                headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                body: "join_code=" + encodeURIComponent(joinCode)
-            });
-            const result = await response.json();
-
-            btn.textContent = "Check In";
-
-            if (!result.success) {
-                btn.disabled = false;
-                showToast(result.message || "Invalid join code.", "danger");
-                return;
-            }
-
-            joinCodeInput.disabled = true;
-            btn.disabled = true;
-
-            sessionCardText.textContent = result.course_code + " — " + result.course_title;
-            sessionCard.style.display = "flex";
-            startCountdown(result.seconds_remaining);
-
-            document.getElementById("faceCheckSection").style.display = "block";
-            document.getElementById("facePrompt").style.display = "block";
-            startVerifyBtn.style.display = "inline-block";
-            startVerifyBtn.disabled = false;
-            startVerifyBtn.textContent = "Start Verification";
-        } catch (err) {
-            btn.disabled = false;
-            btn.textContent = "Check In";
-            showToast("Could not reach the server. Please try again.", "danger");
-        }
-    });
-}
-
-if (startVerifyBtn) {
-    startVerifyBtn.addEventListener("click", async function() {
-        startVerifyBtn.disabled = true;
-        startVerifyBtn.textContent = "Verifying...";
-        document.getElementById("facePrompt").style.display = "none";
-        document.getElementById("checkinVideo").style.display = "block";
-        document.getElementById("faceStatus").style.display = "block";
-
-        const verified = await runFaceVerification();
-
-        if (verified) {
-            document.getElementById("face_verified").value = "1";
-            faceAlreadyVerified = true;
-            stopCountdown();
-            checkinForm.submit();
-        } else {
-            document.getElementById("facePrompt").style.display = "block";
-            startVerifyBtn.disabled = false;
-            startVerifyBtn.textContent = "Try Again";
-        }
-    });
-}
+<?php endif; ?>
 
 <?php if ($error): ?>
-document.addEventListener("DOMContentLoaded", function () {
-    showToast(<?= json_encode($error) ?>, "danger");
-});
-<?php endif; ?>
-<?php if ($success): ?>
-document.addEventListener("DOMContentLoaded", function () {
-    showToast(<?= json_encode($success) ?>, "success");
-});
+document.addEventListener("DOMContentLoaded", function () { showToast(<?= json_encode($error) ?>, "danger"); });
 <?php endif; ?>
 </script>
 </body>

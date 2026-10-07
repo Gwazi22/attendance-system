@@ -1,0 +1,180 @@
+
+MODIBBO ADAMA UNIVERSITY, YOLA
+P.M.B. 2076, Yola, Adamawa State, Nigeria
+FACULTY OF COMPUTING
+DEPARTMENT OF COMPUTER SCIENCE
+
+GUIDELINES FOR WRITING UNDERGRADUATE PROJECT REPORT
+Minimum Benchmark for BTech. and BSc. Programmes
+
+June 2026
+
+
+How to use this document: Each section heading below is followed by a brief italicised description of its purpose and expected content. Candidates should treat these as guidance, not rigid prescriptions; supervisors retain discretion to adapt requirements to the demands of a given study.
+PRELIMINARY PAGES
+These pages precede the body of the thesis and are paginated with lower-case roman numerals (i, ii, iii …). They appear in the order listed below.
+Cover Page
+The outer cover bearing the thesis title, the candidate's full name, the degree sought, the department, and the month and year of submission.
+Title Page
+Replicates the cover page with the addition of the registration number and the standard award statement ("A thesis submitted to … in partial fulfilment of the requirements for the award of …").
+Certification
+Signed page on which the supervisor(s) attest that the work is original to the candidate and was carried out under their supervision.
+Approval
+Page bearing the signatures of the internal examiner, external examiner, Head of Department, confirming that the thesis has been examined and accepted.
+Dedication
+A brief, one-paragraph personal statement dedicating the work to person(s) of the candidate's choosing.
+Acknowledgements
+Recognition of individuals, institutions and funding bodies that contributed materially or intellectually to the completion of the work.
+Abstract
+A self-contained summary of 150–250 words covering the problem, objectives, methodology, principal findings, and contribution to knowledge. Written last but placed here.
+Table of Contents
+Auto-generated listing of all chapters, sections and subsections with corresponding page numbers. Should mirror the heading hierarchy used throughout the document.
+List of Tables, List of Figures, List of Plates (where applicable)
+Sequential, chapter-based listings of all tables, figures and plates, each with its caption and page number. Include only those lists that apply.
+Note: Plates are photographs; figures are diagrams, charts or graphs. The two are frequently and incorrectly conflated.
+
+
+CHAPTER ONE: INTRODUCTION
+Establishes the research context, articulates the problem, and states what the study sets out to achieve.
+1.1 Background to the Study
+Contextual narrative that situates the work within its broader subject area and traces the developments that give rise to the inquiry.
+1.2 Motivation of the Study
+The personal, societal, scientific or industrial drivers explaining why this particular study is being undertaken at this time.
+1.3 Statement of the Problem
+A precise articulation of the specific gap, deficiency or unresolved question the study addresses. Should be sharp, evidence-backed and free of generalities. You must cite other others with their viewpoints concerning this problem.
+1.4 Aim and Objectives of the Study
+States the overarching purpose of the study and the concrete steps by which it will be achieved.
+Aim: "What" is to be done — i.e. the deliverable/output of the work: a theory, software framework, model, algorithm, system, etc.
+Objectives: "How" the aim is to be achieved. Objectives must be SMART (Specific, Measurable, Achievable, Relevant, Time-bound) and each should begin with an action verb.
+1.5 Significance of the Study
+The expected value of the work to academia, industry, government and end-users. Answers the "so what?" question.
+1.6 Scope of the Study
+The boundaries of the work — what is covered (domain, dataset, period, geography, target users) and what is intentionally excluded.
+1.7 Limitations of the Study
+Constraints encountered (data access, computational resources, time, sample size) that may bound the generalisability of the findings.
+1.8 Operational Definition of Terms
+Definitions of key technical terms as they are used in this specific work, distinguishing the operational sense from the ordinary dictionary meaning.
+
+
+CHAPTER TWO: LITERATURE REVIEW
+A systematic, critical synthesis of prior scholarship that locates the present study within the existing body of knowledge.
+Approach: Adopt a systematic literature review conforming to the 5Cs — Cite, Compare, Contrast, Critique, Connect.
+2.1 Conceptual/Theoretical Review
+Survey of the foundational theories, models and paradigms that underpin the study. Subsections may be tailored to suit the specific work.
+2.2 Review of Related Works
+Critical examination of empirical works by other authors that are directly relevant to the project. A minimum of 15 sources, with at least 60% published in the last five years, is expected where applicable.
+2.3 Summary of Literature Review
+A condensed synthesis of the reviewed works, presented in a meta-analysis table that exposes patterns, strengths, weaknesses and unresolved issues.
+Table 2.1: Meta-Analysis Table
+Author	Strength	Weakness	Limitation
+			
+			
+
+2.4 Research Gap
+A focused statement of the specific deficiencies the present study addresses, drawn directly from the synthesis in Section 2.3 and used to justify the work.
+
+
+CHAPTER THREE: METHODOLOGY
+Sets out the theories, techniques and tools used to realise the aim and objectives. This is the chapter against which methodological rigour is judged.
+Note: All figures, tables and equations must be discussed in the body of the text; none should appear without commentary. Number them on a chapter basis (e.g. Figure 3.2, Table 3.1).
+3.1 Theoretical Framework
+The underpinning theories that justify the chosen approach. A postgraduate work without an explicit theoretical anchor will not be accepted — a PG thesis is not a project.
+3.2 Conceptual Framework
+Visual and narrative representation of the proposed solution, including system architecture, component diagrams, and process flows in both as-is and to-be forms.
+
+3.2.1Development Methodology (SDLC)
+State the model you selected (Agile/Scrum, Iterative Waterfall, V-Model) and why for your project size. Include Figure 3.1: Adopted SDLC Model then discuss it in text.
+
+3.2.2Requirement Engineering
+Requirement gathering techniques: Describe which you used, sample size, and why. 
+Functional Requirements:  list FR1, FR2... with description. Discuss each group in text.
+ Non-Functional Requirements: performance, security, usability, etc.
+
+3.2.3System Design (UML)
+Have at least 4 UML diagrams (Use Case Diagram, Class Diagram, Sequence/Activity Diagram etc.), every diagram gets a paragraph explaining the diagram
+
+3.2.4Architectural Design
+Present your architecture (3-tier, MVC, client-server, microservices). discuss layers and communication of system architecture.
+
+3.2.5Database Design
+Outline system structural blueprint. It requires a visual Entity-Relationship Diagram (ERD) to map out data relationships, a detailed database schema defining the tables, fields, data types, and keys, and a concluding discussion on the normalization level (such as 3NF) to ensure data integrity and reduce redundancy.
+
+3.3 Mathematical Framework – optional for BSc (only include if you have formulas)
+Formal definitions, equations, derivations and (where relevant) proofs that underlie the proposed model. Equations must be typeset using the equation editor, not as images or plain text.
+3.4 Computational Framework
+Algorithms, pseudocode, complexity analysis and the computational logic that operationalise the mathematical framework into something executable.
+3.5 Tools
+Hardware specifications, software stack, programming languages, libraries, frameworks, datasets and evaluation platforms used to implement and validate the work.
+
+CHAPTER FOUR: RESULTS AND DISCUSSION
+Presents the outputs produced by applying the methodology of Chapter Three and interprets them against the objectives stated in Section 1.4.
+Note: The depth of results is a function of the depth of the design; the depth of discussion is a function of the depth of the results. Use infographics to visualise tabular data where appropriate and must include screenshots of the live simulation/development environment.
+
+
+CHAPTER FIVE: SUMMARY, CONCLUSION AND RECOMMENDATIONS
+Closes the thesis by recapping the work, stating what has been established, and pointing forward to applications and future research.
+5.1 Summary
+A brief, non-evaluative recap of the problem, methods and principal findings. No new material should be introduced here.
+5.2 Conclusion
+Definitive statements of what the study has established, addressing each objective in turn and grounded strictly in the results.
+5.3 Recommendations
+Actionable suggestions for academics, practitioners, regulators and policy makers, arising directly from the findings.
+5.3.1 Application Areas
+Specific domains, sectors and use-cases where the deliverable can be deployed for practical benefit.
+5.3.2 Suggestions for Further Research
+Open questions, methodological refinements and adjacent problems that the present study has surfaced but not resolved.
+5.4 Contributions to Knowledge
+A numbered list of the novel contributions made by the thesis. Each contribution should map back to an objective in Section 1.4.
+REFERENCES
+A complete alphabetical listing of every source cited in the body of the thesis, formatted strictly in APA 7th edition style. Uncited sources should not appear in this list.
+APPENDICES
+Supplementary material that supports but does not interrupt the main narrative. Each appendix should be referenced at least once in the body of the thesis.
+Appendix A: Sample of Source Code
+Annotated extracts of the source code central to the implementation. Full repositories may be referenced by URL or DOI.
+Appendix B: Sample of Outputs
+Screenshots, console logs and result artefacts that supplement those discussed in Chapter Four.
+Appendix C: Questionnaire (where applicable)
+A clean copy of the instrument used for primary data collection — questionnaire, interview schedule, or observation guide.
+
+
+GENERAL REQUIREMENTS
+✓Language: Write in clear, formal British English. Use third-person passive where appropriate for methodology (“The system was designed...”). Avoid slang and pidgin.
+✓Originality: The project must be your own work. All code, diagrams, and text taken from others must be cited.
+✓Plagiarism: Maximum similarity index of <20% on plagiarism/AI detector (excluding references and code listings).
+✓Ethics: Projects involving human data, questionnaires, or personal information require departmental ethical clearance.
+✓Supervision: Minimum of six documented supervisor meetings. Logbook must be signed.
+
+GENERAL FORMATTING REQUIREMENTS
+These specifications apply uniformly to all chapters, appendices and preliminary pages unless otherwise stated.
+Element	Specification
+Paper Type / Size	A4
+Font Type 	Times New Roman
+Margins	Top 2.5cm, Bottom 2.5cm, 
+Right 2.5cm, Left 3.0cm (for binding)
+Body Font Size	12 points (body)
+Chapter Headings	Arial, 14pt, Bold, ALL CAPS, Centered E.g. CHAPTER ONE
+Sub-heading	Arial, 12pt, Bold, Left-aligned E.g. 1.2 Summary
+Line Spacing	1.5 spacing for main text
+Single Spacing	Abstract, References, Table contents, Figure captions, 
+long quotes (>40 words), Appendices
+Paragraph	First line indent 1.27cm (0.5 inch). No extra blank line
+between paragraphs.
+Page Numbering	Preliminaries: lowercase Roman (i, ii, iii, iv...) at bottom-center. Chapters: Arabic (1,2,3...) 
+Referencing Style	APA 7th edition
+
+
+
+Captioning Conventions
+All equations, tables, figures and plates are numbered on a chapter basis. Table captions sit above the table; figure and plate captions sit below.
+
+Plate 1.1: IP Address Registration Interface
+(Example of a plate caption; 1.1 denotes the first plate in Chapter One.)
+
+Figure 3.2: The Login Interface
+(Example of a figure caption; 3.2 denotes the second figure in Chapter Three.)
+
+Table 2.4: Privileges of the Administrator
+S/N	Privilege	Description
+1	Create Account	Enables the administrator to create accounts for users and assign roles.
+2	Block / Unblock Account	Enables the administrator to block any suspected account and to unblock a customer's account.
+(Example of a table caption; 2.4 denotes the fourth table in Chapter Two.)
