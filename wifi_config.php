@@ -19,6 +19,11 @@ $allowed_ip_prefixes = [
     "192.168.43.",      // common home/office router range
     "192.168.97.",      // common home/office router range
     "192.168.136.",     // common home/office router range
+    "192.168.137.",     // Windows Mobile Hotspot (laptop as hotspot)
+    "192.168.201.",     // hotspot range seen during testing
+    "192.168.182.",     // hotspot range seen during testing
+    "192.168.13.",     // hotspot range seen during testing
+    "192.168.68.",     // hotspot range seen during testing
 ];
 
 /**

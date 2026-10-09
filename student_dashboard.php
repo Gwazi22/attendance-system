@@ -9,13 +9,8 @@ $success = "";
 $last_checkin = null; // set on a successful check-in, used to render the Success screen
 
 function get_client_ip() {
-    if (!empty($_SERVER['HTTP_CLIENT_IP'])) {
-        return $_SERVER['HTTP_CLIENT_IP'];
-    }
-    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-        $parts = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
-        return trim($parts[0]);
-    }
+    // Use only the real connection address. Request headers such as
+    // X-Forwarded-For can be edited by the client, so they are ignored.
     return $_SERVER['REMOTE_ADDR'];
 }
 
@@ -43,7 +38,9 @@ $fp_stmt->close();
 if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["join_code"])) {
     $join_code = trim($_POST["join_code"]);
     $student_ip = get_client_ip();
-    $face_verified = isset($_POST["face_verified"]) && $_POST["face_verified"] === "1";
+    // Face verification is confirmed from the SERVER-side session (set by
+    // verify_face.php), valid for 5 minutes, not from a browser form field.
+    $face_verified = isset($_SESSION["face_verified_at"]) && (time() - $_SESSION["face_verified_at"]) <= 300;
 
     if (empty($join_code)) {
         $error = "Please enter the join code given by your lecturer.";
@@ -88,13 +85,16 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["join_code"])) {
                     if ($dup->num_rows > 0) {
                         $error = "You have already been marked present for this session.";
                     } else {
+                        $face_score = $_SESSION["face_score"] ?? null;
                         $insert = $conn->prepare(
-                            "INSERT INTO attendance_records (session_id, student_id, ip_address, status)
-                             VALUES (?, ?, ?, 'present')"
+                            "INSERT INTO attendance_records (session_id, student_id, ip_address, face_match_score, status)
+                             VALUES (?, ?, ?, ?, 'present')"
                         );
-                        $insert->bind_param("iis", $session['session_id'], $student_id, $student_ip);
+                        $insert->bind_param("iisd", $session['session_id'], $student_id, $student_ip, $face_score);
 
                         if ($insert->execute()) {
+                            // One verification = one check-in
+                            unset($_SESSION["face_verified_at"], $_SESSION["face_score"]);
                             $success = "You're marked present for " . $session['course_code'] . " — " . $session['course_title'] . ".";
                             $last_checkin = [
                                 'course_code'  => $session['course_code'],
@@ -211,6 +211,7 @@ $first_name = trim(explode(" ", $_SESSION["full_name"])[0]);
     <link rel="stylesheet" href="assets/css/theme.css">
     <script src="assets/js/theme.js"></script>
     <script defer src="assets/facelib/face-api.min.js"></script>
+    <script defer src="assets/js/face-engine.js"></script>
 </head>
 <body>
 
@@ -278,7 +279,7 @@ $first_name = trim(explode(" ", $_SESSION["full_name"])[0]);
     <div class="mobile-shell">
         <div class="mobile-topbar">
             <div>
-                <div class="hello"><?= $greeting ?>, <?= htmlspecialchars($first_name) ?> 👋</div>
+                <div class="hello"><?= $greeting ?>, <?= htmlspecialchars($first_name) ?></div>
                 <p class="sub">Keep showing up. It matters.</p>
             </div>
             <button type="button" class="theme-switch" id="themeSwitch" data-theme="light" aria-label="Toggle day mode" aria-pressed="false">
@@ -754,6 +755,7 @@ function preloadModels() {
         await loadStepWithRing(() => faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL), 0, 8);
         await loadStepWithRing(() => faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL), 8, 20);
         await loadStepWithRing(() => faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL), 20, 100);
+        await FaceEngine.prepare();
         modelsLoaded = true;
     })();
 }
@@ -778,7 +780,7 @@ function showResultOverlay(type) {
 }
 
 function evaluateFacePosition(detection, video) {
-    const box = detection.detection.box;
+    const box = detection.box || detection.detection.box;
     const faceWidthRatio = box.width / video.videoWidth;
     const centerX = box.x + box.width / 2;
     const centerY = box.y + box.height / 2;
@@ -801,7 +803,10 @@ async function runFaceVerification() {
 
     try {
         if (!modelsLoadingPromise) preloadModels();
-        await modelsLoadingPromise;
+        await Promise.race([
+            modelsLoadingPromise,
+            new Promise((_, reject) => setTimeout(() => reject(new Error("model load timeout")), 90000))
+        ]);
     } catch (err) {
         ringWrap.style.display = "none";
         statusEl.className = "alert alert-danger";
@@ -824,10 +829,24 @@ async function runFaceVerification() {
     }
     video.srcObject = stream;
     video.muted = true;
-    try { await video.play(); } catch (playErr) { console.warn("video.play() failed:", playErr); }
+    try {
+        // play() can stay pending on some devices, so never wait on it forever
+        await Promise.race([video.play(), new Promise(resolve => setTimeout(resolve, 5000))]);
+    } catch (playErr) { console.warn("video.play() failed:", playErr); }
 
     statusEl.querySelector("span").textContent = "Position your face in the frame...";
-    await new Promise(resolve => { video.onloadedmetadata = () => resolve(); });
+    // The browser has usually fired "loadedmetadata" already while we awaited play().
+    // Waiting for an event that already happened never finishes (the page then
+    // sits on this message), so check the video state directly instead.
+    for (let i = 0; i < 50 && (video.readyState < 2 || !video.videoWidth); i++) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    if (!video.videoWidth) {
+        stream.getTracks().forEach(track => track.stop());
+        statusEl.className = "alert alert-danger";
+        statusEl.querySelector("span").textContent = "The camera did not start. Close other apps using the camera and try again.";
+        return false;
+    }
 
     let stableGoodCount = 0;
     let detection = null;
@@ -838,7 +857,7 @@ async function runFaceVerification() {
     while (attempts < maxAttempts) {
         attempts++;
         let d = null;
-        try { d = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()); }
+        try { d = await FaceEngine.detect(video, 320); }
         catch (frameErr) { console.warn("Face detection error on this frame:", frameErr); d = null; }
 
         if (!d) {
@@ -874,26 +893,28 @@ async function runFaceVerification() {
     statusEl.className = "alert alert-info";
     statusEl.querySelector("span").textContent = "Capturing...";
 
-    let fullDetection = null;
+    let captured = null;
     try {
-        fullDetection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();
+        captured = await FaceEngine.captureAverage(video, 3, function (n, total) {
+            statusEl.querySelector("span").textContent = "Capturing " + n + " of " + total + "... hold still";
+        });
     } catch (captureErr) {
-        console.warn("Final capture detection error:", captureErr);
+        console.warn("Final capture error:", captureErr);
         stream.getTracks().forEach(track => track.stop());
         statusEl.className = "alert alert-danger";
-        statusEl.querySelector("span").textContent = "Something went wrong capturing your face. Please try again.";
+        statusEl.querySelector("span").textContent = "Face capture is too slow on this device. Please try again.";
         return false;
     }
     stream.getTracks().forEach(track => track.stop());
 
-    if (!fullDetection) {
+    if (!captured || captured.count < 2) {
         statusEl.className = "alert alert-danger";
-        statusEl.querySelector("span").textContent = "No face detected. Please try again.";
+        statusEl.querySelector("span").textContent = "No clear face detected. Please try again.";
         await showResultOverlay("failure");
         return false;
     }
 
-    const descriptorArray = Array.from(fullDetection.descriptor);
+    const descriptorArray = captured.descriptor;
     let result;
     try {
         const response = await fetch("verify_face.php", {
@@ -928,7 +949,13 @@ startVerifyBtn.addEventListener("click", async function () {
     startVerifyBtn.textContent = "Verifying...";
     document.getElementById("checkinVideo").style.display = "block";
 
-    const verified = await runFaceVerification();
+    let verified = false;
+    try {
+        verified = await runFaceVerification();
+    } catch (err) {
+        console.error("Face verification error:", err);
+        showToast("Face verification stopped unexpectedly. Please try again.", "danger");
+    }
 
     if (verified) {
         faceAlreadyVerified = true;

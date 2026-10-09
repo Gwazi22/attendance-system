@@ -14,7 +14,7 @@ $incoming_descriptor = $data["descriptor"];
 $descriptor_json = json_encode($incoming_descriptor);
 
 // Below this Euclidean distance, treat two descriptors as "the same face".
-// Deliberately stricter than the 0.6 threshold used at check-in time
+// Deliberately stricter than the 0.5 threshold used at check-in time
 // (verify_face.php) — a slightly tighter bound here reduces the chance of
 // two genuinely different people being flagged as a false match, while
 // still catching the same face enrolled twice under different accounts.

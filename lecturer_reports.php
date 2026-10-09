@@ -1,5 +1,5 @@
 <?php
-$required_role = 'admin';
+$required_role = 'lecturer';
 require_once "auth_check.php";
 
 // --- Filters: course (required to generate a report) + date range preset ---
@@ -9,19 +9,25 @@ if (!in_array($range, ['7', '30', '90', 'all'], true)) {
     $range = '30';
 }
 
-// Course list for the dropdown (system-wide, admin sees everything)
+$lecturer_id = (int)$_SESSION["user_id"];
+
+// Course list for the dropdown: ONLY this lecturer's own courses
 $courses = [];
-$result = $conn->query("SELECT course_id, course_code, course_title FROM courses ORDER BY course_code");
+$cl = $conn->prepare("SELECT course_id, course_code, course_title FROM courses WHERE lecturer_id = ? ORDER BY course_code");
+$cl->bind_param("i", $lecturer_id);
+$cl->execute();
+$result = $cl->get_result();
 while ($row = $result->fetch_assoc()) {
     $courses[] = $row;
 }
+$cl->close();
 
 $report = null;
 
 if ($course_id > 0) {
-    // Confirm the course exists
-    $cstmt = $conn->prepare("SELECT course_code, course_title FROM courses WHERE course_id = ?");
-    $cstmt->bind_param("i", $course_id);
+    // Confirm the course exists AND belongs to this lecturer
+    $cstmt = $conn->prepare("SELECT course_code, course_title FROM courses WHERE course_id = ? AND lecturer_id = ?");
+    $cstmt->bind_param("ii", $course_id, $lecturer_id);
     $cstmt->execute();
     $course_row = $cstmt->get_result()->fetch_assoc();
     $cstmt->close();
@@ -162,23 +168,23 @@ $donut_offset = $report ? $donut_circumference - ($report['rate'] / 100) * $donu
         </div>
 
         <nav class="sidebar-nav">
-            <a href="admin_dashboard.php">
+            <a href="lecturer_dashboard.php">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>
                 Dashboard
             </a>
-            <a href="admin_users.php">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.5 3-5.5 6.5-5.5s6.5 2 6.5 5.5"/><circle cx="18" cy="8.5" r="2.3"/><path d="M16.5 14.3c2.6.4 4.5 2.2 4.5 5.1"/></svg>
-                Users
-            </a>
-            <a href="admin_courses.php">
+            <a href="lecturer_dashboard.php#courses-section">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>
                 Courses
             </a>
-            <a href="admin_attendance.php">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/></svg>
+            <a href="lecturer_dashboard.php#attendance-section">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/><path d="m8.5 14 2 2 4-4"/></svg>
                 Attendance
             </a>
-            <a href="admin_reports.php" class="active">
+            <a href="lecturer_dashboard.php#students-section">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.5 3-5.5 6.5-5.5s6.5 2 6.5 5.5"/><circle cx="18" cy="8.5" r="2.3"/><path d="M16.5 14.3c2.6.4 4.5 2.2 4.5 5.1"/></svg>
+                Students
+            </a>
+            <a href="lecturer_reports.php" class="active">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17h4v4H3zM10 10h4v11h-4zM17 4h4v17h-4z"/></svg>
                 Reports
             </a>
@@ -187,7 +193,7 @@ $donut_offset = $report ? $donut_circumference - ($report['rate'] / 100) * $donu
         <div class="sidebar-foot">
             <div class="sidebar-user">
                 <span class="name"><?= htmlspecialchars($_SESSION["full_name"]) ?></span>
-                <span class="role">System Administrator</span>
+                <span class="role">Lecturer</span>
             </div>
             <a href="logout.php" class="btn btn-outline btn-sm w-full">Logout</a>
         </div>
@@ -197,7 +203,7 @@ $donut_offset = $report ? $donut_circumference - ($report['rate'] / 100) * $donu
         <div class="dash-topbar">
             <div class="greeting">
                 <h1>Attendance Report</h1>
-                <p>Pick a course and date range to see who showed up.</p>
+                <p>Pick one of your courses and a date range to see who showed up.</p>
             </div>
             <div class="dash-topbar-right">
                 <button type="button" class="theme-switch" id="themeSwitch" data-theme="light" aria-label="Toggle day mode" aria-pressed="false">
@@ -210,7 +216,7 @@ $donut_offset = $report ? $donut_circumference - ($report['rate'] / 100) * $donu
         <div class="content">
 
             <div class="panel" style="padding-bottom:20px;">
-                <form method="GET" action="admin_reports.php" class="form-grid cols-session">
+                <form method="GET" action="lecturer_reports.php" class="form-grid cols-session">
                     <div>
                         <label>Course</label>
                         <select name="course_id" required>
@@ -241,7 +247,7 @@ $donut_offset = $report ? $donut_circumference - ($report['rate'] / 100) * $donu
                 <div class="alert alert-danger"><span style="margin-right:auto;">That course could not be found.</span></div>
             <?php elseif ($report === null): ?>
                 <div class="panel">
-                    <p class="muted" style="padding: 10px 0 16px;">Select a course above and generate a report to see attendance numbers.</p>
+                    <p class="muted" style="padding: 10px 0 16px;"><?= empty($courses) ? "You have no courses yet. Add a course on the dashboard first." : "Select a course above and generate a report to see attendance numbers." ?></p>
                 </div>
             <?php elseif ($report['total'] === 0): ?>
                 <div class="panel">

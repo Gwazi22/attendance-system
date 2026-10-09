@@ -88,6 +88,82 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["reset_password"])) {
     }
 }
 
+// Handle: reset a student's face enrolment (they must enrol again)
+if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["reset_face"])) {
+    $last_action = "reset_face";
+    $target_user_id = (int)($_POST["user_id"] ?? 0);
+    $fstmt = $conn->prepare("SELECT full_name FROM users WHERE user_id = ? AND role = 'student'");
+    $fstmt->bind_param("i", $target_user_id);
+    $fstmt->execute();
+    $frow = $fstmt->get_result()->fetch_assoc();
+    $fstmt->close();
+    if (!$frow) {
+        $error = "That student no longer exists.";
+    } else {
+        $fdel = $conn->prepare("DELETE FROM face_profiles WHERE student_id = ?");
+        $fdel->bind_param("i", $target_user_id);
+        $fdel->execute();
+        $fdel->close();
+        $success = "Face profile cleared for " . $frow['full_name'] . ". The student must enrol again.";
+    }
+}
+
+// Handle: delete a user account
+if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["delete_user"])) {
+    $last_action = "delete_user";
+    $target_user_id = (int)($_POST["user_id"] ?? 0);
+    $dstmt = $conn->prepare("SELECT full_name, role FROM users WHERE user_id = ?");
+    $dstmt->bind_param("i", $target_user_id);
+    $dstmt->execute();
+    $drow = $dstmt->get_result()->fetch_assoc();
+    $dstmt->close();
+
+    if (!$drow) {
+        $error = "That user no longer exists.";
+    } elseif ($target_user_id === (int)$_SESSION["user_id"]) {
+        $error = "You cannot delete your own account while you are logged in.";
+    } else {
+        if ($drow['role'] === 'admin') {
+            $admin_count = (int)$conn->query("SELECT COUNT(*) AS c FROM users WHERE role = 'admin'")->fetch_assoc()['c'];
+            if ($admin_count <= 1) {
+                $error = "You cannot delete the last administrator account.";
+            }
+        }
+        if ($error === "" && $drow['role'] === 'lecturer') {
+            $cstmt = $conn->prepare("SELECT COUNT(*) AS c FROM courses WHERE lecturer_id = ?");
+            $cstmt->bind_param("i", $target_user_id);
+            $cstmt->execute();
+            $owned = (int)$cstmt->get_result()->fetch_assoc()['c'];
+            $cstmt->close();
+            if ($owned > 0) {
+                $error = $drow['full_name'] . " still owns " . $owned . " course(s). Reassign or remove them on the Courses page first.";
+            }
+        }
+        if ($error === "") {
+            $conn->begin_transaction();
+            try {
+                $d1 = $conn->prepare("DELETE FROM attendance_records WHERE student_id = ?");
+                $d1->bind_param("i", $target_user_id);
+                $d1->execute();
+                $d1->close();
+                $d2 = $conn->prepare("DELETE FROM face_profiles WHERE student_id = ?");
+                $d2->bind_param("i", $target_user_id);
+                $d2->execute();
+                $d2->close();
+                $d3 = $conn->prepare("DELETE FROM users WHERE user_id = ?");
+                $d3->bind_param("i", $target_user_id);
+                $d3->execute();
+                $d3->close();
+                $conn->commit();
+                $success = ucfirst($drow['role']) . " account removed: " . $drow['full_name'] . ".";
+            } catch (Throwable $e) {
+                $conn->rollback();
+                $error = "Could not delete the account. Please try again.";
+            }
+        }
+    }
+}
+
 // --- Filters: role tab + search ---
 $role_filter = $_GET['role'] ?? 'all';
 if (!in_array($role_filter, ['all', 'student', 'lecturer', 'admin'], true)) {
@@ -178,7 +254,7 @@ function qs($overrides = []) {
 <div id="toastStack"></div>
 
 <div class="shell">
-    <aside class="sidebar">
+    <aside class="sidebar sidebar-dark">
         <div class="sidebar-brand">
             <div class="logo-mark size-sm">
                 <svg viewBox="0 0 24 24" fill="none">
@@ -198,25 +274,18 @@ function qs($overrides = []) {
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.5 3-5.5 6.5-5.5s6.5 2 6.5 5.5"/><circle cx="18" cy="8.5" r="2.3"/><path d="M16.5 14.3c2.6.4 4.5 2.2 4.5 5.1"/></svg>
                 Users
             </a>
-            <span class="nav-soon">
+            <a href="admin_courses.php">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>
                 Courses
-                <span class="soon-chip">SOON</span>
-            </span>
-            <span class="nav-soon">
+            </a>
+            <a href="admin_attendance.php">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/></svg>
                 Attendance
-                <span class="soon-chip">SOON</span>
-            </span>
+            </a>
             <a href="admin_reports.php">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17h4v4H3zM10 10h4v11h-4zM17 4h4v17h-4z"/></svg>
                 Reports
             </a>
-            <span class="nav-soon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a7.4 7.4 0 0 0 0-3l2-1.6-2-3.4-2.4.8a7.6 7.6 0 0 0-2.6-1.5L14 2h-4l-.4 2.4a7.6 7.6 0 0 0-2.6 1.5l-2.4-.8-2 3.4 2 1.6a7.4 7.4 0 0 0 0 3l-2 1.6 2 3.4 2.4-.8a7.6 7.6 0 0 0 2.6 1.5L10 22h4l.4-2.4a7.6 7.6 0 0 0 2.6-1.5l2.4.8 2-3.4-2-1.6Z"/></svg>
-                Settings
-                <span class="soon-chip">SOON</span>
-            </span>
         </nav>
 
         <div class="sidebar-foot">
@@ -232,7 +301,7 @@ function qs($overrides = []) {
         <div class="dash-topbar">
             <div class="greeting">
                 <h1>Manage Users</h1>
-                <p>Add and review student, lecturer, and admin accounts.</p>
+                <p>Add, reset and remove student, lecturer, and admin accounts.</p>
             </div>
             <div class="dash-topbar-right">
                 <button type="button" class="btn btn-primary btn-sm" id="toggleAddUser">+ Add User</button>
@@ -337,11 +406,27 @@ function qs($overrides = []) {
                                         <td><span class="chip <?= $role_chip ?>"><?= ucfirst($u['role']) ?></span></td>
                                         <td><span class="chip chip-success">Active</span></td>
                                         <td>
-                                            <button type="button" class="btn-icon js-reset-password"
-                                                    data-user-id="<?= (int)$u['user_id'] ?>"
-                                                    data-user-name="<?= htmlspecialchars($u['full_name'], ENT_QUOTES) ?>">
-                                                Reset Password
-                                            </button>
+                                            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                                                <button type="button" class="btn-icon js-reset-password"
+                                                        data-user-id="<?= (int)$u['user_id'] ?>"
+                                                        data-user-name="<?= htmlspecialchars($u['full_name'], ENT_QUOTES) ?>">
+                                                    Reset Password
+                                                </button>
+                                                <?php if ($u['role'] === 'student'): ?>
+                                                    <form method="POST" action="admin_users.php?<?= qs() ?>" class="js-confirm"
+                                                          data-confirm="<?= htmlspecialchars('Clear the face profile of ' . $u['full_name'] . '? They will have to enrol again.', ENT_QUOTES) ?>">
+                                                        <input type="hidden" name="user_id" value="<?= (int)$u['user_id'] ?>">
+                                                        <button type="submit" name="reset_face" class="btn-icon">Reset Face</button>
+                                                    </form>
+                                                <?php endif; ?>
+                                                <?php if ((int)$u['user_id'] !== (int)$_SESSION['user_id']): ?>
+                                                    <form method="POST" action="admin_users.php?<?= qs() ?>" class="js-confirm"
+                                                          data-confirm="<?= htmlspecialchars('Permanently delete ' . $u['full_name'] . '? Their attendance records and face profile will be deleted too. This cannot be undone.', ENT_QUOTES) ?>">
+                                                        <input type="hidden" name="user_id" value="<?= (int)$u['user_id'] ?>">
+                                                        <button type="submit" name="delete_user" class="btn-outline-danger">Delete</button>
+                                                    </form>
+                                                <?php endif; ?>
+                                            </div>
                                         </td>
                                     </tr>
                                 <?php endforeach; ?>
@@ -394,6 +479,11 @@ addPanel.classList.add("open");
 resetPanel.classList.add("open");
 <?php endif; ?>
 
+document.querySelectorAll("form.js-confirm").forEach(function (f) {
+    f.addEventListener("submit", function (e) {
+        if (!confirm(f.dataset.confirm)) { e.preventDefault(); }
+    });
+});
 const roleSelect = document.getElementById("roleSelect");
 const matricField = document.getElementById("matricField");
 function syncMatricField() {

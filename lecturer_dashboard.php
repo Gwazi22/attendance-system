@@ -240,7 +240,7 @@ $first_name = trim(explode(" ", $_SESSION["full_name"])[0]);
 <div id="toastStack"></div>
 
 <div class="shell">
-    <aside class="sidebar">
+    <aside class="sidebar sidebar-dark">
         <div class="sidebar-brand">
             <div class="logo-mark size-sm">
                 <svg viewBox="0 0 24 24" fill="none">
@@ -268,16 +268,10 @@ $first_name = trim(explode(" ", $_SESSION["full_name"])[0]);
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.5 3-5.5 6.5-5.5s6.5 2 6.5 5.5"/><circle cx="18" cy="8.5" r="2.3"/><path d="M16.5 14.3c2.6.4 4.5 2.2 4.5 5.1"/></svg>
                 Students
             </a>
-            <span class="nav-soon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17h4l10-10a2 2 0 0 0-3-3L4 14v3Z"/><path d="M13 6l4 4"/></svg>
+            <a href="lecturer_reports.php">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17h4v4H3zM10 10h4v11h-4zM17 4h4v17h-4z"/></svg>
                 Reports
-                <span class="soon-chip">SOON</span>
-            </span>
-            <span class="nav-soon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a7.4 7.4 0 0 0 0-3l2-1.6-2-3.4-2.4.8a7.6 7.6 0 0 0-2.6-1.5L14 2h-4l-.4 2.4a7.6 7.6 0 0 0-2.6 1.5l-2.4-.8-2 3.4 2 1.6a7.4 7.4 0 0 0 0 3l-2 1.6 2 3.4 2.4-.8a7.6 7.6 0 0 0 2.6 1.5L10 22h4l.4-2.4a7.6 7.6 0 0 0 2.6-1.5l2.4.8 2-3.4-2-1.6Z"/></svg>
-                Settings
-                <span class="soon-chip">SOON</span>
-            </span>
+            </a>
         </nav>
 
         <div class="sidebar-foot">
@@ -292,7 +286,7 @@ $first_name = trim(explode(" ", $_SESSION["full_name"])[0]);
     <div class="main">
         <div class="dash-topbar">
             <div class="greeting">
-                <h1><?= $greeting ?>, <?= htmlspecialchars($first_name) ?> 👋</h1>
+                <h1><?= $greeting ?>, <?= htmlspecialchars($first_name) ?></h1>
                 <p>Here's what's happening with your classes today.</p>
             </div>
             <div class="dash-topbar-right">

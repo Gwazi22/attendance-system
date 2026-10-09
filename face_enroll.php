@@ -14,6 +14,7 @@ require_once "auth_check.php";
     <link rel="stylesheet" href="assets/css/theme.css">
     <script src="assets/js/theme.js"></script>
     <script defer src="assets/facelib/face-api.min.js"></script>
+    <script defer src="assets/js/face-engine.js"></script>
 </head>
 <body>
 
@@ -42,6 +43,7 @@ require_once "auth_check.php";
         </div>
         <div>
             <div class="wordmark size-lg">AttendX</div>
+            <div class="tagline">Smart Attendance. Anytime. Anywhere.</div>
         </div>
     </div>
 
@@ -80,7 +82,8 @@ require_once "auth_check.php";
             <svg class="face-oval-overlay" viewBox="0 0 360 270" preserveAspectRatio="none">
                 <ellipse id="faceOval" cx="180" cy="135" rx="95" ry="120"></ellipse>
             </svg>
-        </div>
+        </div>
+        <div id="engineInfo" class="muted small" style="margin:8px 0;"></div>
 
         <div>
             <button id="captureBtn" class="btn btn-primary w-full" disabled>Capture Face</button>
@@ -179,6 +182,8 @@ async function loadModels() {
             20, 100, "Loading recognition model (largest file)…"
         );
 
+        statusText.textContent = "Preparing face engine…";
+        await FaceEngine.prepare();
         modelsLoaded = true;
         stopTimer();
         statusMsg.classList.remove("state-info");
@@ -226,17 +231,22 @@ async function startCamera() {
 /* ---------------------------------------------------------
    Live guidance: distance, centering, lighting, obstruction
 --------------------------------------------------------- */
+let brightCanvas = null;
 function getAverageBrightness(video, box) {
-    const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    // small reusable canvas keeps this cheap on slow phones
+    const scale = 0.25;
+    if (!brightCanvas) brightCanvas = document.createElement("canvas");
+    const cw = Math.max(1, Math.floor(video.videoWidth * scale));
+    const ch = Math.max(1, Math.floor(video.videoHeight * scale));
+    brightCanvas.width = cw;
+    brightCanvas.height = ch;
+    const ctx = brightCanvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(video, 0, 0, cw, ch);
 
-    const x = Math.max(0, Math.floor(box.x));
-    const y = Math.max(0, Math.floor(box.y));
-    const w = Math.min(canvas.width - x, Math.floor(box.width));
-    const h = Math.min(canvas.height - y, Math.floor(box.height));
+    const x = Math.max(0, Math.floor(box.x * scale));
+    const y = Math.max(0, Math.floor(box.y * scale));
+    const w = Math.min(cw - x, Math.floor(box.width * scale));
+    const h = Math.min(ch - y, Math.floor(box.height * scale));
     if (w <= 0 || h <= 0) return null;
 
     const data = ctx.getImageData(x, y, w, h).data;
@@ -274,65 +284,94 @@ function evaluateFacePosition(detection, video) {
     return { ok: true, message: "Position looks good — hold still and click Capture." };
 }
 
+let guideActive = false;
+let guideDone = Promise.resolve();
+
+// One detection at a time. The old timer started a new detection every 0.4s
+// even if the last one had not finished, which piled up on slower phones.
 function startGuidance() {
     const ovalEl = document.getElementById("faceOval");
-    guideInterval = setInterval(async () => {
-        if (!modelsLoaded || video.readyState < 2) return;
-        const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions());
-        if (!detection) {
-            guideMsg.className = "guide-box state-warn";
-            guideMsg.textContent = "No face detected — make sure your face is visible.";
-            ovalEl.classList.remove("oval-good", "oval-bad");
-            return;
+    const engineInfo = document.getElementById("engineInfo");
+    guideActive = true;
+    guideDone = (async () => {
+        while (guideActive) {
+            try {
+                if (modelsLoaded && video.readyState >= 2 && video.videoWidth) {
+                    const detection = await FaceEngine.detect(video, 320);
+                    if (!guideActive) break;
+                    if (engineInfo) engineInfo.textContent = "Engine: " + FaceEngine.backend + " · " + FaceEngine.lastMs + " ms per check";
+                    if (!detection) {
+                        guideMsg.className = "guide-box state-warn";
+                        guideMsg.textContent = "No face detected — make sure your face is visible.";
+                        ovalEl.classList.remove("oval-good", "oval-bad");
+                    } else {
+                        const status = evaluateFacePosition({ detection: detection }, video);
+                        guideMsg.className = status.ok ? "guide-box state-good" : "guide-box state-warn";
+                        guideMsg.textContent = status.message;
+                        ovalEl.classList.toggle("oval-good", status.ok);
+                        ovalEl.classList.toggle("oval-bad", !status.ok);
+                    }
+                }
+            } catch (err) {
+                console.warn("Guidance check failed:", err);
+            }
+            await FaceEngine.sleep(300);
         }
-        const status = evaluateFacePosition(detection, video);
-        guideMsg.className = status.ok ? "guide-box state-good" : "guide-box state-warn";
-        guideMsg.textContent = status.message;
-        if (status.ok) {
-            ovalEl.classList.add("oval-good");
-            ovalEl.classList.remove("oval-bad");
-        } else {
-            ovalEl.classList.add("oval-bad");
-            ovalEl.classList.remove("oval-good");
-        }
-    }, 400);
+    })();
+}
+async function stopGuidance() {
+    guideActive = false;
+    await guideDone;
 }
 
 /* ---------------------------------------------------------
    Capture and save
 --------------------------------------------------------- */
 captureBtn.addEventListener("click", async () => {
-    resultMsg.innerHTML = `<div class="status-box state-info"><span>Detecting face...</span></div>`;
+    captureBtn.disabled = true;
+    await stopGuidance();   // free the processor for the capture
+    const info = (t) => `<div class="status-box state-info"><span>${t}</span></div>`;
+    const fail = (t) => `<div class="status-box state-danger"><span>${t}</span></div>`;
+    resultMsg.innerHTML = info("Capturing… hold still");
 
-    const detection = await faceapi
-        .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
-        .withFaceLandmarks()
-        .withFaceDescriptor();
-
-    if (!detection) {
-        resultMsg.innerHTML = `<div class="status-box state-danger"><span>No face detected. Try again with better lighting/positioning.</span></div>`;
+    let captured = null;
+    try {
+        captured = await FaceEngine.captureAverage(video, 5, (n, total) => {
+            resultMsg.innerHTML = info("Capturing " + n + " of " + total + "… hold still");
+        });
+    } catch (err) {
+        resultMsg.innerHTML = fail("Face capture is too slow on this device. Please try again.");
+        captureBtn.disabled = false;
+        startGuidance();
         return;
     }
 
-    const descriptorArray = Array.from(detection.descriptor);
+    if (!captured || captured.count < 3) {
+        resultMsg.innerHTML = fail("Could not get a clear face. Hold still in good light and try again.");
+        captureBtn.disabled = false;
+        startGuidance();
+        return;
+    }
 
     try {
         const response = await fetch("save_face.php", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ descriptor: descriptorArray })
+            body: JSON.stringify({ descriptor: captured.descriptor })
         });
         const result = await response.json();
 
         if (result.success) {
             resultMsg.innerHTML = `<div class="status-box state-success"><span>Face enrolled successfully!</span></div>`;
-            if (guideInterval) clearInterval(guideInterval);
         } else {
-            resultMsg.innerHTML = `<div class="status-box state-danger"><span>${result.message}</span></div>`;
+            resultMsg.innerHTML = fail(result.message);
+            startGuidance();
         }
     } catch (err) {
-        resultMsg.innerHTML = `<div class="status-box state-danger"><span>Error saving face profile. Try again.</span></div>`;
+        resultMsg.innerHTML = fail("Error saving face profile. Try again.");
+        startGuidance();
     }
+    captureBtn.disabled = false;
 });
 
 // Wait for the full page load (including the deferred face-api.min.js script)
