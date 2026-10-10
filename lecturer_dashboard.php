@@ -6,15 +6,25 @@ $lecturer_id = $_SESSION["user_id"];
 $error = "";
 $success = "";
 
+// Messages saved before a redirect (Post/Redirect/Get), so that refreshing the
+// page never re-submits a form.
+if (!empty($_SESSION["flash_success"])) { $success = $_SESSION["flash_success"]; unset($_SESSION["flash_success"]); }
+if (!empty($_SESSION["flash_error"]))   { $error   = $_SESSION["flash_error"];   unset($_SESSION["flash_error"]); }
+
 // Proactively close any of this lecturer's sessions whose end time has already passed —
 // runs every time the dashboard loads, not just when a student tries to check in late.
-$conn->query(
+// The current time comes from PHP (not MySQL's NOW()) so it always agrees with the
+// times this page displays and with the check-in page, even if the two servers'
+// timezones differ.
+$now_php = date("Y-m-d H:i:s");
+$expire = $conn->prepare(
     "UPDATE attendance_sessions
      SET status = 'closed'
-     WHERE lecturer_id = " . intval($lecturer_id) . "
-       AND status = 'active'
-       AND CONCAT(session_date, ' ', end_time) < NOW()"
+     WHERE lecturer_id = ? AND status = 'active' AND end_time < ?"
 );
+$expire->bind_param("is", $lecturer_id, $now_php);
+$expire->execute();
+$expire->close();
 
 // Handle: Add a new course
 if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["add_course"])) {
@@ -30,7 +40,10 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["add_course"])) {
         $stmt = $conn->prepare("INSERT INTO courses (course_code, course_title, course_unit, lecturer_id) VALUES (?, ?, ?, ?)");
         $stmt->bind_param("ssii", $course_code, $course_title, $course_unit, $lecturer_id);
         if ($stmt->execute()) {
-            $success = "Course added successfully.";
+            $_SESSION["flash_success"] = "Course added successfully.";
+            $stmt->close();
+            header("Location: lecturer_dashboard.php#courses-section");
+            exit;
         } else {
             $error = "Could not add course. Please try again.";
         }
@@ -61,6 +74,23 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["create_session"])) {
         if ($check->num_rows === 0) {
             $error = "Invalid course selection.";
         } else {
+            // Block a duplicate: an active session for the same course whose time overlaps.
+            $dup = $conn->prepare(
+                "SELECT session_id FROM attendance_sessions
+                 WHERE course_id = ? AND lecturer_id = ? AND status = 'active'
+                   AND start_time < ? AND end_time > ?
+                 LIMIT 1"
+            );
+            $dup->bind_param("iiss", $course_id, $lecturer_id, $end_datetime, $start_datetime);
+            $dup->execute();
+            $dup->store_result();
+            $is_duplicate = $dup->num_rows > 0;
+            $dup->close();
+        }
+
+        if ($check->num_rows > 0 && $is_duplicate) {
+            $error = "An active session for this course already exists for that time. Close it first or choose a different time.";
+        } elseif ($check->num_rows > 0) {
             $join_code = str_pad(strval(random_int(0, 999999)), 6, "0", STR_PAD_LEFT);
 
             $insert = $conn->prepare(
@@ -70,7 +100,11 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["create_session"])) {
             $insert->bind_param("iissss", $course_id, $lecturer_id, $session_date, $start_datetime, $end_datetime, $join_code);
 
             if ($insert->execute()) {
-                $success = "Session created. Share this join code with students: $join_code";
+                $_SESSION["flash_success"] = "Session created. Share this join code with students: $join_code";
+                $insert->close();
+                $check->close();
+                header("Location: lecturer_dashboard.php#attendance-section");
+                exit;
             } else {
                 $error = "Something went wrong creating the session.";
             }
@@ -87,7 +121,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["close_session"])) {
     $close->bind_param("ii", $session_id, $lecturer_id);
     $close->execute();
     $close->close();
-    $success = "Session closed.";
+    $_SESSION["flash_success"] = "Session closed.";
+    header("Location: lecturer_dashboard.php#attendance-section");
+    exit;
 }
 
 // Fetch this lecturer's courses
@@ -121,7 +157,11 @@ while ($row = $result->fetch_assoc()) {
 $stmt->close();
 
 // How many seconds before an active session's end time counts as "closing soon"
-const CLOSING_SOON_WINDOW_SECONDS = 300; // 5 minutes
+const CLOSING_SOON_WINDOW_SECONDS = 60; // 1 minute for every session
+
+function closing_soon_window($start_ts, $end_ts) {
+    return CLOSING_SOON_WINDOW_SECONDS;
+}
 
 // --- Dashboard-home stats (all derived from real records, nothing fabricated) ---
 
@@ -338,9 +378,9 @@ $first_name = trim(explode(" ", $_SESSION["full_name"])[0]);
                                 } elseif ($now < $start_ts) {
                                     $chip = ['Upcoming', 'chip-secondary'];
                                 } elseif ($now <= $end_ts) {
-                                    $chip = ($end_ts - $now) <= CLOSING_SOON_WINDOW_SECONDS ? ['Closing Soon', 'chip-warning'] : ['Active', 'chip-success'];
+                                    $chip = ($end_ts - $now) <= closing_soon_window($start_ts, $end_ts) ? ['Closing Soon', 'chip-warning'] : ['Active', 'chip-success'];
                                 } else {
-                                    $chip = ['Active', 'chip-success'];
+                                    $chip = ['Closed', 'chip-secondary'];
                                 }
                             ?>
                                 <div class="session-row">
@@ -453,7 +493,7 @@ $first_name = trim(explode(" ", $_SESSION["full_name"])[0]);
                                     if ($s['status'] === 'active') {
                                         $end_ts = strtotime($s['end_time']);
                                         $remaining = $end_ts - time();
-                                        if ($remaining > 0 && $remaining <= CLOSING_SOON_WINDOW_SECONDS) {
+                                        if ($remaining > 0 && $remaining <= closing_soon_window(strtotime($s['start_time']), $end_ts)) {
                                             $is_closing_soon = true;
                                         }
                                     }
@@ -532,6 +572,14 @@ $first_name = trim(explode(" ", $_SESSION["full_name"])[0]);
 </div>
 
 <script>
+// Ignore a second submit of the same form (double-click)
+document.querySelectorAll('form').forEach(function (f) {
+    f.addEventListener('submit', function (e) {
+        if (f.dataset.sent) { e.preventDefault(); return; }
+        f.dataset.sent = '1';
+    });
+});
+
 const startTimeInput = document.getElementById('start_time');
 if (startTimeInput) {
     startTimeInput.addEventListener('change', function() {

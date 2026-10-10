@@ -14,10 +14,10 @@ $incoming_descriptor = $data["descriptor"];
 $descriptor_json = json_encode($incoming_descriptor);
 
 // Below this Euclidean distance, treat two descriptors as "the same face".
-// Deliberately stricter than the 0.5 threshold used at check-in time
-// (verify_face.php) — a slightly tighter bound here reduces the chance of
-// two genuinely different people being flagged as a false match, while
-// still catching the same face enrolled twice under different accounts.
+// This is the same limit used at check-in in verify_face.php (0.5), so a
+// face that is rejected as a duplicate here would also be rejected at
+// check-in. 0.5 is stricter than the usual face-api.js value of 0.6, which
+// lowers the chance of two different people being treated as the same face.
 const DUPLICATE_FACE_THRESHOLD = 0.5;
 
 // Cross-account uniqueness check: reject enrollment if this face already
